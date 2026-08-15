@@ -1,0 +1,54 @@
+name: Test and build plugins
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: true
+  NODE_VERSION: "24"
+
+jobs:
+  test:
+    name: Test and build (${{ matrix.plugin }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: [files, kanban, mail, notes, terminal]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ matrix.plugin }}/package.json
+
+      - name: Install dependencies
+        working-directory: ${{ matrix.plugin }}
+        run: npm install
+
+      - name: Run tests
+        working-directory: ${{ matrix.plugin }}
+        run: npm test
+
+      - name: Typecheck
+        working-directory: ${{ matrix.plugin }}
+        run: npm run typecheck --if-present
+
+      - name: Build
+        working-directory: ${{ matrix.plugin }}
+        run: npm run build
