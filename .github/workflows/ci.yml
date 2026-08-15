@@ -20,13 +20,14 @@ env:
 
 jobs:
   test:
-    name: Test and build (${{ matrix.plugin }})
-    runs-on: ubuntu-latest
+    name: ${{ matrix.plugin }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
         plugin: [files, kanban, mail, notes, terminal]
+        os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@v6
