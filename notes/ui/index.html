@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Notes</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <div id="sidebar"></div>
+    <div id="main">
+      <div id="toolbar">
+        <input id="searchInput" type="text" placeholder="Search notes..." />
+        <button id="newNoteBtn">+ New Note</button>
+      </div>
+      <div id="content"></div>
+      <div id="status"></div>
+    </div>
+  </div>
+
+  <div id="editor">
+    <div class="editor-panel">
+      <h3 id="editorTitle">New Note</h3>
+      <textarea id="editorText" placeholder="Write a note... (Markdown supported)"></textarea>
+      <input id="editorTags" class="editor-tags" type="text" placeholder="Tags (comma-separated)" />
+      <div class="editor-actions">
+        <button class="btn-cancel" id="editorCancel">Cancel</button>
+        <button class="btn-save" id="editorSave">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="confirmDialog">
+    <div class="confirm-panel">
+      <h3 id="confirmTitle">Confirm</h3>
+      <p id="confirmMessage"></p>
+      <div class="confirm-actions">
+        <button class="btn-cancel" id="confirmNo">Cancel</button>
+        <button class="btn-danger" id="confirmYes">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="marked.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>NusaShell Terminal</title>
+  <link rel="stylesheet" href="./vendor/xterm.css">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div class="terminal-shell">
+    <header class="terminal-topbar">
+      <div class="terminal-brand" aria-label="NusaShell Terminal">
+        <span class="terminal-brand-mark" aria-hidden="true">›_</span>
+        <div><strong>Terminal</strong><span id="status-cwd">Home</span></div>
+      </div>
+      <div class="terminal-meta">
+        <span class="meta-pill" id="status-shell">shell</span>
+        <span class="meta-pill" id="status-session">no session</span>
+        <span class="meta-pill meta-status" id="status-state">starting…</span>
+      </div>
+      <div class="topbar-actions">
+        <button class="secondary-button" id="new-session-button" type="button"><span aria-hidden="true">＋</span> New session</button>
+        <button class="secondary-button" id="clear-button" type="button">Clear</button>
+      </div>
+    </header>
+
+    <main class="terminal-main" aria-label="Terminal">
+      <div id="terminal-container" class="terminal-container"></div>
+      <div id="terminal-overlay" class="terminal-overlay" hidden>
+        <div class="overlay-card">
+          <h2 id="overlay-title">Terminal MCP is not ready</h2>
+          <p id="overlay-message">Start the Terminal plugin from the launcher or enable it in the agent view, then reopen this window.</p>
+          <button class="primary-button" id="retry-button" type="button">Retry</button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="./vendor/xterm.js"></script>
+  <script src="./vendor/addon-fit/addon-fit.js"></script>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

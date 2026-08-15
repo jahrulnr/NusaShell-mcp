@@ -1,0 +1,71 @@
+{
+  "id": "nusashell.files",
+  "name": "Files",
+  "version": "0.1.1",
+  "icon": "\ud83d\udcc2",
+  "ui": {
+    "entry": "ui/index.html",
+    "window": {
+      "mode": "fullscreen",
+      "defaultSize": {
+        "width": 1280,
+        "height": 800
+      },
+      "resizable": true
+    }
+  },
+  "mcp": {
+    "transport": "stdio",
+    "command": "node",
+    "args": [
+      "mcp/server.cjs"
+    ],
+    "env": {},
+    "autostart": false,
+    "keepAliveOnClose": false
+  },
+  "automation": {
+    "emits": [
+      {
+        "type": "files.modified",
+        "description": "A file was created, written, patched, or appended",
+        "payloadSchema": {
+          "type": "object",
+          "properties": {
+            "path": { "type": "string" },
+            "action": { "type": "string", "enum": ["write", "patch", "append", "mkdir", "touch"] }
+          },
+          "required": ["path", "action"]
+        }
+      },
+      {
+        "type": "files.deleted",
+        "description": "A file or directory was deleted",
+        "payloadSchema": {
+          "type": "object",
+          "properties": {
+            "path": { "type": "string" },
+            "recursive": { "type": "boolean" }
+          },
+          "required": ["path"]
+        }
+      },
+      {
+        "type": "files.moved",
+        "description": "A file or directory was moved or renamed",
+        "payloadSchema": {
+          "type": "object",
+          "properties": {
+            "source": { "type": "string" },
+            "destination": { "type": "string" }
+          },
+          "required": ["source", "destination"]
+        }
+      }
+    ]
+  },
+  "dependencies": {
+    "shell": ">=0.0.2"
+  },
+  "category": "Productivity"
+}

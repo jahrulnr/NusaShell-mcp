@@ -1,0 +1,31 @@
+{
+  "id": "nusashell.terminal",
+  "name": "Terminal",
+  "version": "1.0.0",
+  "icon": "\ud83d\udcbb",
+  "ui": {
+    "entry": "ui/index.html",
+    "window": {
+      "mode": "fullscreen",
+      "defaultSize": {
+        "width": 1280,
+        "height": 800
+      },
+      "resizable": true
+    }
+  },
+  "mcp": {
+    "transport": "stdio",
+    "command": "node",
+    "args": [
+      "mcp/server.cjs"
+    ],
+    "env": {},
+    "autostart": false,
+    "keepAliveOnClose": true
+  },
+  "dependencies": {
+    "shell": ">=0.0.2"
+  },
+  "category": "Development"
+}

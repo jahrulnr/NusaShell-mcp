@@ -1,0 +1,31 @@
+{
+  "id": "nusashell.notes",
+  "name": "Notes",
+  "version": "1.0.0",
+  "icon": "\ud83d\udcdd",
+  "ui": {
+    "entry": "ui/index.html",
+    "window": {
+      "mode": "panel",
+      "defaultSize": {
+        "width": 480,
+        "height": 560
+      },
+      "resizable": true
+    }
+  },
+  "mcp": {
+    "transport": "stdio",
+    "command": "node",
+    "args": [
+      "mcp/server.cjs"
+    ],
+    "env": {},
+    "autostart": true,
+    "keepAliveOnClose": false
+  },
+  "dependencies": {
+    "shell": ">=0.0.1"
+  },
+  "category": "Productivity"
+}

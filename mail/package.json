@@ -1,0 +1,23 @@
+{
+  "name": "@nusashell/example-mail",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild mcp/server.js --bundle --platform=node --format=cjs --target=node20 --outfile=mcp/server.cjs",
+    "test": "vitest run",
+    "typecheck": "tsc --allowJs --checkJs --noEmit --module NodeNext --moduleResolution NodeNext --target ES2022 mcp/*.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "imapflow": "^1.2.9",
+    "mailparser": "^3.9.3",
+    "nodemailer": "^9.0.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

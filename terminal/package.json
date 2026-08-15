@@ -1,0 +1,22 @@
+{
+  "name": "nusashell-plugin-terminal",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild mcp/server.js --bundle --platform=node --format=cjs --target=node20 --external:node-pty --outfile=mcp/server.cjs",
+    "test": "vitest run",
+    "test:unit": "vitest run tests/terminal-bridge.test.js",
+    "test:e2e": "vitest run tests/terminal-mcp.e2e.test.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "node-pty": "^1.0.0",
+    "@xterm/xterm": "^5.5.0",
+    "@xterm/addon-fit": "^0.10.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "vitest": "^3.2.4"
+  }
+}

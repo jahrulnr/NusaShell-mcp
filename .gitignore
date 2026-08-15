@@ -1,0 +1,7 @@
+node_modules/
+plugins-data/
+*.log
+
+# Plugin runtime data (managed at runtime under NUSASHELL_USER_DATA)
+notes/notes.json
+kanban/kanban.json
