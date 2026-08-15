@@ -7,7 +7,8 @@
     "build": "esbuild mcp/server.js --bundle --platform=node --format=cjs --target=node20 --external:node-pty --outfile=mcp/server.cjs",
     "test": "vitest run",
     "test:unit": "vitest run tests/terminal-bridge.test.js",
-    "test:e2e": "vitest run tests/terminal-mcp.e2e.test.js"
+    "test:e2e": "vitest run tests/terminal-mcp.e2e.test.js",
+    "postinstall": "node scripts/fix-pty-permissions.cjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

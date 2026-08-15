@@ -167,7 +167,7 @@ describe("terminal MCP e2e", () => {
     expect(result.shellKind).toBe("bash");
   });
 
-  it.skipIf(process.env.CI && process.platform === "darwin")("opens a PTY session with colored prompt / ls ANSI escapes", async () => {
+  it("opens a PTY session with colored prompt / ls ANSI escapes", async () => {
     const opened = await client.callTool("open", {});
     expect(opened.sessionId).toBeTruthy();
     expect(opened.cwd).toBe(HOME);
