@@ -19,9 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-Note: The Mail plugin (`mail/`) contains code adapted from
-`codefuturist/email-mcp` (LGPL-3.0-or-later). See `mail/LICENSE.upstream`
-and `mail/UPSTREAM.md` for upstream license and attribution details.

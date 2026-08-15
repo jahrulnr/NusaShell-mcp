@@ -35,3 +35,12 @@ npm install
 npm run build   # esbuild bundle
 npm test        # vitest
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+The Mail plugin contains code adapted from
+[`codefuturist/email-mcp`](https://github.com/codefuturist/email-mcp)
+(LGPL-3.0-or-later). See `mail/LICENSE.upstream` and `mail/UPSTREAM.md`
+for upstream license and attribution details.
