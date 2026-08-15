@@ -706,6 +706,7 @@ export class ContextEngine {
     const clock = Number.isFinite(now) ? now : Date.now();
     /** @type {Array<{ path: string, score: number, cost: number, roleMatch: number, recency: number }>} */
     const roleScores = [];
+    /** @type {[string, number][]} */
     let ranked;
     if (useRole) {
       ranked = Object.entries(scores).map(([rel, baseScore]) => {
