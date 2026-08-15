@@ -13,6 +13,19 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// jsdom's File lacks arrayBuffer(). Polyfill it so uploadFile() can read
+// file contents the same way it does in a real browser.
+if (typeof File !== "undefined" && !File.prototype.arrayBuffer) {
+  File.prototype.arrayBuffer = async function () {
+    const reader = new FileReader();
+    return new Promise((resolve, reject) => {
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsArrayBuffer(this);
+    });
+  };
+}
+
 const ELEMENT_IDS = [
   "files-workspace",
   "root-caption",
@@ -134,7 +147,7 @@ describe("Files UI — upload & drop (ticket #77)", () => {
     installDom();
     const mod = await loadApp();
     callTool = window.shell.callTool;
-    callTool.mockImplementation(async (name) => {
+    callTool.mockImplementation(async (_pluginId, name) => {
       if (name === "list") return { items: [] };
       if (name === "tree") return { tree: [] };
       return {};
@@ -180,10 +193,12 @@ describe("Files UI — upload & drop (ticket #77)", () => {
     const event = makeDropEvent(dataTransfer);
     document.dispatchEvent(event);
 
-    // The drop handler is async; poll a few microtask turns for the write.
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    // The drop handler is async (handleFilesDrop → handleUpload → uploadFile
+    // → file.arrayBuffer via FileReader → callTool). FileReader.onload is a
+    // macrotask, so wait with setTimeout instead of microtask polling.
+    for (let i = 0; i < 20 && writeCalls().length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
     const writes = writeCalls();
     expect(writes.some((w) => w.path === "drop.txt")).toBe(true);
   });

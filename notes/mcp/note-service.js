@@ -111,7 +111,7 @@ export class NoteService {
     notes.sort((a, b) => {
       const aVal = a[sortKey] || a.createdAt;
       const bVal = b[sortKey] || b.createdAt;
-      return new Date(bVal) - new Date(aVal);
+      return new Date(bVal).getTime() - new Date(aVal).getTime();
     });
     return notes;
   }
