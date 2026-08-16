@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -21,11 +23,17 @@ func TestResolvePathRejectsEmpty(t *testing.T) {
 }
 
 func TestResolvePathAcceptsAbsolute(t *testing.T) {
-	p, err := resolvePath("/tmp/root", "/media/work/x.md")
+	// OS-agnostic absolute path: on Windows root is a drive; on Unix a plain
+	// absolute path. Avoid hardcoding "/media/…" which is relative on Windows.
+	abs := t.TempDir()
+	if runtime.GOOS == "windows" {
+		abs = filepath.Join("C:\\", filepath.Base(t.TempDir()))
+	}
+	p, err := resolvePath(t.TempDir(), abs)
 	if err != nil {
 		t.Fatalf("absolute should pass: %v", err)
 	}
-	if p != "/media/work/x.md" {
+	if p != filepath.Clean(abs) {
 		t.Fatalf("expected cleaned abs path, got %q", p)
 	}
 }
