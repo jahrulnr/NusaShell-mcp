@@ -2,21 +2,21 @@
   "files": {
     "version": "2.0.0",
     "tag": "files-v2.0.0",
-    "releasedAt": "2026-08-16T00:00:00Z"
+    "releasedAt": "2026-08-16T15:05:48Z"
   },
   "kanban": {
     "version": "2.0.0",
     "tag": "kanban-v2.0.0",
-    "releasedAt": "2026-08-16T00:00:00Z"
+    "releasedAt": "2026-08-16T15:05:48Z"
   },
   "notes": {
     "version": "2.0.0",
     "tag": "notes-v2.0.0",
-    "releasedAt": "2026-08-16T00:00:00Z"
+    "releasedAt": "2026-08-16T15:05:48Z"
   },
   "terminal": {
     "version": "2.0.0",
     "tag": "terminal-v2.0.0",
-    "releasedAt": "2026-08-16T00:00:00Z"
+    "releasedAt": "2026-08-16T15:05:48Z"
   }
 }
