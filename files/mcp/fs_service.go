@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	maxReadBytes     = 10 * 1024 * 1024
+	maxReadBytes     = 1 * 1024 * 1024
 	maxTreeDepth     = 10
 	maxSearchResults = 1000
 	maxGrepLineLen   = 500
@@ -442,6 +442,7 @@ type ReadResult struct {
 }
 
 func (s *FileService) ReadFile(input string, opts ReadOpts) (*ReadResult, error) {
+	started := time.Now()
 	filePath, err := resolvePath(s.root, input)
 	if err != nil {
 		return nil, err
@@ -460,6 +461,7 @@ func (s *FileService) ReadFile(input string, opts ReadOpts) (*ReadResult, error)
 	if err != nil {
 		return nil, s.wrapErr(input, err)
 	}
+	stderr("read %s (%d bytes) took %s", filePath, len(raw), time.Since(started).Round(time.Millisecond))
 	lines := splitLines(string(raw))
 
 	maxBytes := opts.MaxBytes
