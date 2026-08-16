@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -32,19 +33,17 @@ func headerLines(fields map[string]any) string {
 }
 
 func formatExecReceipt(result *ExecResult) string {
-	ok := result.ExitCode != nil && *result.ExitCode == 0 && !result.TimedOut
 	fields := map[string]any{
-		"ok":         ok,
-		"exit_code":  derefInt(result.ExitCode),
-		"signal":     result.Signal,
-		"shell":      string(result.ShellKind),
-		"shell_path": result.Shell,
-		"cwd":        result.Cwd,
-		"timed_out":  result.TimedOut,
-		"truncated":  result.Truncated,
+		"exit_code": derefInt(result.ExitCode),
+		"shell":     string(result.ShellKind),
+		"timed_out": result.TimedOut,
+		"truncated": result.Truncated,
 	}
-	if result.Signal == "" {
-		fields["signal"] = ""
+	if result.Signal != "" {
+		fields["signal"] = result.Signal
+	}
+	if home, err := os.UserHomeDir(); err == nil && result.Cwd != home {
+		fields["cwd"] = result.Cwd
 	}
 	return strings.Join([]string{
 		headerLines(fields),
