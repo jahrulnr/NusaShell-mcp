@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -51,7 +52,7 @@ func registerTools(s *server.MCPServer, svc *FileService) {
 		mcp.WithBoolean("lineNumbers", mcp.Description("Prefix each line with NNN|.")),
 		mcp.WithNumber("maxBytes", mcp.Description("Maximum UTF-8 bytes returned."), mcp.Min(1.0)),
 		mcp.WithReadOnlyHintAnnotation(true),
-	), handleRead(svc))
+	), withHandlerTimeout(30*time.Second, handleRead(svc)))
 
 	// write
 	s.AddTool(mcp.NewTool("write",
@@ -106,7 +107,7 @@ func registerTools(s *server.MCPServer, svc *FileService) {
 		mcp.WithString("type", mcp.Description("Filter by entry type (default any)."), mcp.Enum("file", "dir", "any")),
 		mcp.WithNumber("maxDepth", mcp.Description("Maximum search depth (1-20)."), mcp.Min(1.0), mcp.Max(20.0)),
 		mcp.WithReadOnlyHintAnnotation(true),
-	), handleSearch(svc))
+	), withHandlerTimeout(30*time.Second, handleSearch(svc)))
 
 	// info
 	s.AddTool(mcp.NewTool("info",
@@ -131,7 +132,7 @@ func registerTools(s *server.MCPServer, svc *FileService) {
 		),
 		mcp.WithNumber("maxResults", mcp.Description("Maximum results (1-1000)."), mcp.Min(1.0), mcp.Max(1000.0)),
 		mcp.WithReadOnlyHintAnnotation(true),
-	), handleGrep(svc))
+	), withHandlerTimeout(30*time.Second, handleGrep(svc)))
 
 	// patch — edits accepts a single edit object or an array of edits (oneOf).
 	s.AddTool(mcp.NewTool("patch",
@@ -170,10 +171,10 @@ func registerTools(s *server.MCPServer, svc *FileService) {
 	), handleTouch(svc))
 
 	// Advanced context tools (ported from files/mcp/context-engine.js and search-relevant.js).
-	s.AddTool(contextMapTool(), handleContextMap(svc))
+	s.AddTool(contextMapTool(), withHandlerTimeout(60*time.Second, handleContextMap(svc)))
 	s.AddTool(detectStackTool(), handleDetectStack(svc))
-	s.AddTool(listSymbolsTool(), handleSearchSymbols(svc))
-	s.AddTool(searchRelevantTool(), handleSearchRelevant(svc))
+	s.AddTool(listSymbolsTool(), withHandlerTimeout(30*time.Second, handleSearchSymbols(svc)))
+	s.AddTool(searchRelevantTool(), withHandlerTimeout(30*time.Second, handleSearchRelevant(svc)))
 }
 
 // --- Tool builders (advanced) ---
@@ -215,6 +216,17 @@ func searchRelevantTool() mcp.Tool {
 		mcp.WithString("path", mcp.Description("Directory to scope the search to. Empty = whole root.")),
 		mcp.WithBoolean("refresh", mcp.Description("Bypass the mtime/size chunk cache.")),
 	)
+}
+
+// withHandlerTimeout bounds a tool handler so a slow filesystem operation
+// (huge grep/search/context_map) cannot leave the MCP request hanging when
+// the process also services other tool calls.
+func withHandlerTimeout(d time.Duration, h server.ToolHandlerFunc) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		ctx, cancel := context.WithTimeout(ctx, d)
+		defer cancel()
+		return h(ctx, req)
+	}
 }
 
 // --- Handlers ---
