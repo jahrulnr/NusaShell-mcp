@@ -1,7 +1,7 @@
 {
   "files": {
-    "version": "2.0.0",
-    "tag": "files-v2.0.0",
+    "version": "2.0.1",
+    "tag": "files-v2.0.1",
     "releasedAt": "2026-08-16T15:05:48Z"
   },
   "kanban": {
@@ -15,8 +15,8 @@
     "releasedAt": "2026-08-16T15:05:48Z"
   },
   "terminal": {
-    "version": "2.0.0",
-    "tag": "terminal-v2.0.0",
+    "version": "2.0.1",
+    "tag": "terminal-v2.0.1",
     "releasedAt": "2026-08-16T15:05:48Z"
   }
 }
