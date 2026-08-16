@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -68,9 +69,21 @@ func handleExec(mgr *SessionManager) server.ToolHandlerFunc {
 		command, _ := args["command"].(string)
 		cwd, _ := args["cwd"].(string)
 		shell, _ := args["shell"].(string)
-		timeoutMs := toIntOr(args["timeoutMs"], 0)
+		timeoutMs, _ := args["timeoutMs"].(float64)
 
-		result, err := RunExecWithContext(ctx, command, cwd, shell, timeoutMs)
+		if timeoutMs < 0 {
+			timeoutMs = 0
+		}
+		// Apply a context deadline so a runaway command (no explicit timeoutMs)
+		// cannot hold the request forever.
+		eff := int64(timeoutMs)
+		if eff <= 0 {
+			eff = defaultExecTimeoutMs
+		}
+		ctx, cancel := context.WithTimeout(ctx, time.Duration(eff)*time.Millisecond)
+		defer cancel()
+
+		result, err := RunExecWithContext(ctx, command, cwd, shell, int(eff))
 		if err != nil {
 			return errorResult(err.Error()), nil
 		}

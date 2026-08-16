@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -16,7 +17,7 @@ func registerTools(s *server.MCPServer, svc *FileService) {
 			mcp.Description("Directory path relative to the files plugin root. Use empty string for root."),
 		),
 		mcp.WithReadOnlyHintAnnotation(true),
-	), handleList(svc))
+	), withHandlerTimeout(30*time.Second, handleList(svc)))
 
 	// tree
 	s.AddTool(mcp.NewTool("tree",
@@ -37,7 +38,7 @@ func registerTools(s *server.MCPServer, svc *FileService) {
 			mcp.Description("Include files in the tree (default true). Set false for dirs-only."),
 		),
 		mcp.WithReadOnlyHintAnnotation(true),
-	), handleTree(svc))
+	), withHandlerTimeout(30*time.Second, handleTree(svc)))
 
 	// read
 	s.AddTool(mcp.NewTool("read",
@@ -61,7 +62,7 @@ func registerTools(s *server.MCPServer, svc *FileService) {
 		mcp.WithString("content", mcp.Required(), mcp.Description("Content to write (UTF-8 text, max 10 MB).")),
 		mcp.WithString("encoding", mcp.Description("Encoding: 'utf8' (default) or 'base64'."), mcp.Enum("utf8", "base64")),
 		mcp.WithIdempotentHintAnnotation(true),
-	), handleWrite(svc))
+	), writeCap(handleWrite(svc)))
 
 	// mkdir
 	s.AddTool(mcp.NewTool("mkdir",
@@ -114,7 +115,7 @@ func registerTools(s *server.MCPServer, svc *FileService) {
 		mcp.WithDescription("Get detailed file metadata (size, dates, permissions, type)."),
 		mcp.WithString("path", mcp.Required(), mcp.Description("File or directory path.")),
 		mcp.WithReadOnlyHintAnnotation(true),
-	), handleInfo(svc))
+	), withHandlerTimeout(30*time.Second, handleInfo(svc)))
 
 	// grep
 	s.AddTool(mcp.NewTool("grep",
@@ -152,14 +153,14 @@ func registerTools(s *server.MCPServer, svc *FileService) {
 		mcp.WithString("path", mcp.Required(), mcp.Description("File path.")),
 		mcp.WithString("content", mcp.Required(), mcp.Description("Content to append.")),
 		mcp.WithIdempotentHintAnnotation(true),
-	), handleAppend(svc))
+	), writeCap(handleAppend(svc)))
 
 	// exists
 	s.AddTool(mcp.NewTool("exists",
 		mcp.WithDescription("Check if a path exists. Returns { exists, isFile, isDir }. Does NOT throw on missing paths."),
 		mcp.WithString("path", mcp.Required(), mcp.Description("File or directory path.")),
 		mcp.WithReadOnlyHintAnnotation(true),
-	), handleExists(svc))
+	), withHandlerTimeout(10*time.Second, handleExists(svc)))
 
 	// touch
 	s.AddTool(mcp.NewTool("touch",
@@ -653,6 +654,22 @@ func jsonResult(data any) (*mcp.CallToolResult, error) {
 	return textAndJSON(formatGenericText(data), data)
 }
 
+// maxWriteBytes bounds a single write/append payload (10 MB, matching the
+// tool description). Larger payloads are rejected before touching the disk
+// so a stray huge request cannot stall the server or the reply pipe.
+const maxWriteBytes = 10 * 1024 * 1024
+
+// writeCap guards a write-like handler against oversized payloads.
+func writeCap(h server.ToolHandlerFunc) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		if content, ok := args["content"].(string); ok && len(content) > maxWriteBytes {
+			return errorResult("content too large: max " + itoa(maxWriteBytes) + " bytes"), nil
+		}
+		return h(ctx, req)
+	}
+}
+
 func errorResult(msg string) *mcp.CallToolResult {
 	return &mcp.CallToolResult{
 		IsError: true,
@@ -660,4 +677,9 @@ func errorResult(msg string) *mcp.CallToolResult {
 			mcp.NewTextContent(msg),
 		},
 	}
+}
+
+// itoa formats an int without importing strconv in files main package.
+func itoa(v int) string {
+	return strconv.Itoa(v)
 }

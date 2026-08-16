@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/base64"
 	"fmt"
@@ -20,6 +21,7 @@ const (
 	maxGrepLineLen   = 500
 	magicByteSample  = 512
 	binaryNulRatio   = 0.30
+	maxGrepFileBytes = 32 * 1024 * 1024 // grep skips larger files (bounded I/O)
 )
 
 var textExtensions = map[string]bool{
@@ -159,10 +161,31 @@ func detectByMagicBytes(buf []byte) string {
 	return ""
 }
 
+// hasModeBit returns true when the OS stat file mode contains the given bit.
+// Separate from regular-file detection so special files can be classified
+// without ever being opened (open on a FIFO would block; devices may hang).
+func hasModeBit(mode os.FileMode, bit os.FileMode) bool {
+	return mode&bit != 0
+}
+
 // detectFileTypeByContent reads the first N bytes and determines if the file
-// is text or binary.
+// is text or binary. Non-regular files (FIFOs, devices, sockets) are never
+// opened: open(O_RDONLY) on a FIFO with no writer blocks forever.
 func detectFileTypeByContent(filePath string) (ftype string, isText bool) {
 	byExt := detectByExtension(filePath)
+	stat, err := os.Stat(filePath)
+	if err != nil {
+		if byExt == "" {
+			return "binary", false
+		}
+		return byExt, byExt == "text"
+	}
+	if !stat.Mode().IsRegular() {
+		if isNamedPipe(stat.Mode()) {
+			return "fifo", false
+		}
+		return "special", false
+	}
 	f, err := os.Open(filePath)
 	if err != nil {
 		if byExt == "" {
@@ -187,6 +210,20 @@ func detectFileTypeByContent(filePath string) (ftype string, isText bool) {
 		return "binary", false
 	}
 	return byExt, false
+}
+
+// isNamedPipe reports whether mode corresponds to a FIFO.
+func isNamedPipe(mode os.FileMode) bool {
+	return hasModeBit(mode, os.ModeNamedPipe)
+}
+
+// isSpecialPath reports whether any path component is a special file (fifo,
+// socket, device). Used before opening to avoid FIFO/device block.
+func isSpecialEntry(mode os.FileMode) bool {
+	if mode.IsRegular() {
+		return false
+	}
+	return hasModeBit(mode, os.ModeNamedPipe|os.ModeSocket|os.ModeDevice|os.ModeCharDevice|os.ModeIrregular)
 }
 
 func formatFileSize(bytes int64) string {
@@ -457,12 +494,10 @@ func (s *FileService) ReadFile(input string, opts ReadOpts) (*ReadResult, error)
 		return nil, fmt.Errorf("File is binary (type=%s); read only supports text. Use info to inspect.", ftype)
 	}
 
-	raw, err := os.ReadFile(filePath)
+	totalLines, err := countLines(filePath)
 	if err != nil {
 		return nil, s.wrapErr(input, err)
 	}
-	stderr("read %s (%d bytes) took %s", filePath, len(raw), time.Since(started).Round(time.Millisecond))
-	lines := splitLines(string(raw))
 
 	maxBytes := opts.MaxBytes
 	if maxBytes <= 0 {
@@ -472,34 +507,53 @@ func (s *FileService) ReadFile(input string, opts ReadOpts) (*ReadResult, error)
 	var selected []string
 	var reason string
 
-	if opts.Start > 0 && opts.End > 0 {
-		s := opts.Start
-		if s < 1 {
-			s = 1
+	switch {
+	case opts.Start > 0 && opts.End > 0:
+		start := opts.Start
+		if start < 1 {
+			start = 1
 		}
-		e := opts.End
-		if e > len(lines) {
-			e = len(lines)
+		lines, err := s.readLineRange(filePath, start, opts.End)
+		if err != nil {
+			return nil, err
 		}
-		selected = lines[s-1 : e]
-		reason = "startEnd"
-	} else if opts.Head > 0 {
-		h := opts.Head
-		if h > len(lines) {
-			h = len(lines)
-		}
-		selected = lines[:h]
-		reason = "head"
-	} else if opts.Tail > 0 {
-		t := opts.Tail
-		if t > len(lines) {
-			t = len(lines)
-		}
-		selected = lines[len(lines)-t:]
-		reason = "tail"
-	} else {
 		selected = lines
+		reason = "startEnd"
+	case opts.Head > 0:
+		h := opts.Head
+		if h > totalLines {
+			h = totalLines
+		}
+		lines, err := s.readLineRange(filePath, 1, h)
+		if err != nil {
+			return nil, err
+		}
+		selected = lines
+		reason = "head"
+	case opts.Tail > 0:
+		t := opts.Tail
+		if t > totalLines {
+			t = totalLines
+		}
+		lines, err := readTailLines(filePath, t, maxBytes)
+		if err != nil {
+			return nil, err
+		}
+		selected = lines
+		reason = "tail"
+	default:
+		raw, err := readPrefix(filePath, maxBytes)
+		if err != nil {
+			return nil, s.wrapErr(input, err)
+		}
+		selected = splitLines(string(raw))
+		if stat.Size() > int64(maxBytes) {
+			reason = "maxBytes"
+		}
 	}
+
+	stderr("read %s (%d bytes -> %d selected lines, mode=%s) took %s",
+		filePath, stat.Size(), len(selected), reason, time.Since(started).Round(time.Millisecond))
 
 	var output string
 	if opts.LineNumbers {
@@ -510,7 +564,7 @@ func (s *FileService) ReadFile(input string, opts ReadOpts) (*ReadResult, error)
 			case "startEnd":
 				lineNo = opts.Start + i
 			case "tail":
-				lineNo = len(lines) - len(selected) + i + 1
+				lineNo = totalLines - len(selected) + i + 1
 			default:
 				lineNo = i + 1
 			}
@@ -533,11 +587,166 @@ func (s *FileService) ReadFile(input string, opts ReadOpts) (*ReadResult, error)
 
 	return &ReadResult{
 		Content:         output,
-		TotalLines:      len(lines),
+		TotalLines:      totalLines,
 		TotalBytes:      stat.Size(),
 		Truncated:       truncated,
 		TruncatedReason: reason,
 	}, nil
+}
+
+// countLines returns the number of lines in a file without loading the whole
+// file into memory (chunked newline scan; splitLines-compatible semantics).
+// Non-regular files are rejected: opening a FIFO would block forever.
+func countLines(filePath string) (int, error) {
+	stat, err := os.Stat(filePath)
+	if err != nil {
+		return 0, err
+	}
+	if !stat.Mode().IsRegular() {
+		return 0, fmt.Errorf("not a regular file: %s", filePath)
+	}
+	f, err := os.Open(filePath)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	count := 0
+	buf := make([]byte, 64*1024)
+	for {
+		n, err := f.Read(buf)
+		if n > 0 {
+			count += bytes.Count(buf[:n], []byte{'\n'})
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return 0, err
+		}
+	}
+	return count + 1, nil
+}
+
+// readLineRange returns lines [from..to] (1-based, inclusive) scanning forward
+// with bounded memory: it stops as soon as line `to` is read.
+func (s *FileService) readLineRange(filePath string, from, to int) ([]string, error) {
+	if from < 1 {
+		from = 1
+	}
+	if to < from {
+		return []string{}, nil
+	}
+	stat, err := os.Stat(filePath)
+	if err != nil {
+		return nil, err
+	}
+	if !stat.Mode().IsRegular() {
+		return nil, fmt.Errorf("not a regular file: %s", filePath)
+	}
+	f, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 256*1024), 16*1024*1024)
+	lines := make([]string, 0, to-from+1)
+	lineNo := 0
+	for scanner.Scan() {
+		lineNo++
+		if lineNo < from {
+			continue
+		}
+		if lineNo > to {
+			break
+		}
+		lines = append(lines, strings.TrimSuffix(scanner.Text(), "\r"))
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return lines, nil
+}
+
+// readTailLines returns the last n lines. Small files are read fully; large
+// files are scanned backwards from the end so only the needed tail is loaded.
+func readTailLines(filePath string, n int, capBytes int) ([]string, error) {
+	stat, err := os.Stat(filePath)
+	if err != nil {
+		return nil, err
+	}
+	if !stat.Mode().IsRegular() {
+		return nil, fmt.Errorf("not a regular file: %s", filePath)
+	}
+	f, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+
+	const chunkSize = 64 * 1024
+	if fi.Size() <= int64(capBytes*2) {
+		raw, err := readPrefix(filePath, int(fi.Size()))
+		if err != nil {
+			return nil, err
+		}
+		lines := splitLines(string(raw))
+		if len(lines) > n {
+			lines = lines[len(lines)-n:]
+		}
+		return lines, nil
+	}
+
+	collected := make([]byte, 0, capBytes*2)
+	pos := fi.Size()
+	for pos > 0 && len(collected) < capBytes*2 {
+		sz := int64(chunkSize)
+		if sz > pos {
+			sz = pos
+		}
+		pos -= sz
+		buf := make([]byte, sz)
+		if _, err := f.ReadAt(buf, pos); err != nil && err != io.EOF {
+			return nil, err
+		}
+		collected = append(buf, collected...)
+		if bytes.Count(collected, []byte{'\n'}) >= n {
+			break
+		}
+	}
+	lines := splitLines(string(collected))
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return lines, nil
+}
+
+// readPrefix reads at most n bytes from the start of a file (bounded memory).
+// Non-regular files are rejected (FIFO/device open would block).
+func readPrefix(filePath string, n int) ([]byte, error) {
+	stat, err := os.Stat(filePath)
+	if err != nil {
+		return nil, err
+	}
+	if !stat.Mode().IsRegular() {
+		return nil, fmt.Errorf("not a regular file: %s", filePath)
+	}
+	f, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	buf := make([]byte, n)
+	read, err := io.ReadFull(f, buf)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return nil, err
+	}
+	return buf[:read], nil
 }
 
 // ReadOpts holds optional parameters for ReadFile.
@@ -653,6 +862,10 @@ func copyRecursive(src, dst string) error {
 				return err
 			}
 		}
+		return nil
+	}
+	if !info.Mode().IsRegular() {
+		// Skip FIFOs/sockets/devices: opening them would block or fail.
 		return nil
 	}
 	data, err := os.ReadFile(src)
@@ -780,6 +993,7 @@ type GrepResult struct {
 }
 
 func (s *FileService) GrepFiles(input, pattern string, opts GrepOpts) (map[string]any, error) {
+	started := time.Now()
 	target, err := resolvePath(s.root, input)
 	if err != nil {
 		return nil, err
@@ -822,6 +1036,7 @@ func (s *FileService) GrepFiles(input, pattern string, opts GrepOpts) (map[strin
 	if len(results) > cap {
 		results = results[:cap]
 	}
+	stderr("grep %s (input=%q, %d results) took %s", target, input, len(results), time.Since(started).Round(time.Millisecond))
 	return map[string]any{
 		"results": results,
 		"meta": map[string]any{
@@ -851,7 +1066,13 @@ func (s *FileService) grepOneFile(entryPath, entryName string, re *regexp.Regexp
 		return
 	}
 	info, err := os.Stat(entryPath)
-	if err != nil || info.IsDir() || info.Size() > maxReadBytes {
+	if err != nil || info.IsDir() || info.Size() > maxGrepFileBytes {
+		return
+	}
+	// Skip files above the read bound in a cheap, extension-driven way before
+	// sniffing content; a 48 MB text blob (e.g. a captured stream) would be
+	// read in full otherwise and hold the request for seconds.
+	if info.Size() > maxReadBytes && detectByExtension(entryName) != "text" {
 		return
 	}
 	_, isText := detectFileTypeByContent(entryPath)

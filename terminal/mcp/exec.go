@@ -22,97 +22,15 @@ type ExecResult struct {
 	DurationMs int64     `json:"durationMs"`
 }
 
-// RunExec runs a one-shot shell command.
+// RunExec runs a one-shot shell command. If timeoutMs is <= 0 a safe default
+// (5 minutes) is applied so a runaway command cannot hold the MCP request
+// forever. Use RunExecWithContext for full context control.
 func RunExec(command, cwd, shell string, timeoutMs int) (*ExecResult, error) {
-	if strings.TrimSpace(command) == "" {
-		return nil, &MissingCommandError{}
+	effective := timeoutMs
+	if effective <= 0 {
+		effective = defaultExecTimeoutMs
 	}
-
-	if cwd == "" {
-		home, _ := userHomeDir()
-		cwd = home
-	}
-	if !isAbs(cwd) {
-		return nil, &InvalidCwdError{Cwd: cwd}
-	}
-
-	resolved := ResolveShell(shell)
-	if !resolved.Available {
-		return nil, &ShellUnavailableError{Shell: shell}
-	}
-
-	args := execArgsForShell(resolved.Kind, command)
-	cmd := exec.Command(resolved.Path, args...)
-	cmd.Dir = cwd
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	startedAt := time.Now()
-
-	var timeoutCh <-chan time.Time
-	if timeoutMs > 0 {
-		timeoutCh = time.After(time.Duration(timeoutMs) * time.Millisecond)
-	}
-
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-
-	timedOut := false
-	var waitErr error
-
-	select {
-	case waitErr = <-done:
-	case <-timeoutCh:
-		timedOut = true
-		_ = cmd.Process.Kill()
-		<-done
-	}
-
-	exitCode := 0
-	signal := ""
-	if waitErr != nil {
-		if exitErr, ok := waitErr.(*exec.ExitError); ok {
-			code := exitErr.ExitCode()
-			exitCode = code
-			if exitErr.ProcessState != nil && exitErr.ProcessState.Sys() != nil {
-				// Signal info is platform-specific; keep a best-effort string.
-				signal = exitErr.ProcessState.String()
-			}
-		} else {
-			return nil, waitErr
-		}
-	}
-
-	out := stdout.String()
-	errOut := stderr.String()
-	truncated := false
-	if len(out) > maxBufferChars {
-		out = out[len(out)-maxBufferChars:]
-		truncated = true
-	}
-	if len(errOut) > maxBufferChars {
-		errOut = errOut[len(errOut)-maxBufferChars:]
-		truncated = true
-	}
-
-	return &ExecResult{
-		Stdout:     stripANSI(out),
-		Stderr:     stripANSI(errOut),
-		ExitCode:   &exitCode,
-		Signal:     signal,
-		TimedOut:   timedOut,
-		Truncated:  truncated,
-		Cwd:        cwd,
-		Shell:      resolved.Path,
-		ShellKind:  resolved.Kind,
-		DurationMs: time.Since(startedAt).Milliseconds(),
-	}, nil
+	return RunExecWithTimeout(command, cwd, shell, effective)
 }
 
 // MissingCommandError is returned when command is empty.
@@ -120,8 +38,23 @@ type MissingCommandError struct{}
 
 func (e *MissingCommandError) Error() string { return "command is required" }
 
+// defaultExecTimeoutMs bounds a command that did not specify a timeout.
+const defaultExecTimeoutMs = 5 * 60 * 1000
+
+// RunExecWithTimeout runs a command honoring an explicit timeout (applied
+// even when the caller passed no timeout). It mirrors RunExecWithContext but
+// derives the timeout internally when timeoutMs <= 0.
+func RunExecWithTimeout(command, cwd, shell string, timeoutMs int) (*ExecResult, error) {
+	ctx := context.Background()
+	return runExec(ctx, command, cwd, shell, timeoutMs)
+}
+
 // RunExecWithContext runs a command honoring context cancellation.
 func RunExecWithContext(ctx context.Context, command, cwd, shell string, timeoutMs int) (*ExecResult, error) {
+	return runExec(ctx, command, cwd, shell, timeoutMs)
+}
+
+func runExec(ctx context.Context, command, cwd, shell string, timeoutMs int) (*ExecResult, error) {
 	if strings.TrimSpace(command) == "" {
 		return nil, &MissingCommandError{}
 	}
@@ -143,10 +76,13 @@ func RunExecWithContext(ctx context.Context, command, cwd, shell string, timeout
 	cmd.Stderr = &stderrB
 
 	startedAt := time.Now()
-	var timeoutCh <-chan time.Time
-	if timeoutMs > 0 {
-		timeoutCh = time.After(time.Duration(timeoutMs) * time.Millisecond)
+	effectiveTimeout := timeoutMs
+	if effectiveTimeout <= 0 {
+		effectiveTimeout = defaultExecTimeoutMs
 	}
+	var timeoutCh <-chan time.Time
+	timeoutCh = time.After(time.Duration(effectiveTimeout) * time.Millisecond)
+
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
