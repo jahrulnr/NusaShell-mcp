@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -17,16 +17,86 @@ concurrency:
 env:
   CI: true
   NODE_VERSION: "24"
+  KNOWN_PLUGINS: "files kanban mail notes terminal"
 
 jobs:
+  # ── detect ──────────────────────────────────────────────────────────
+  # Find which plugin directories changed vs the previous commit (push),
+  # the base branch (PR), or all of them (manual dispatch).
+  # Outputs a JSON array like ["files","notes"] for downstream matrix jobs.
+  detect:
+    name: Detect changed plugins
+    runs-on: ubuntu-latest
+    outputs:
+      plugins: ${{ steps.detect.outputs.plugins }}
+      has-changes: ${{ steps.detect.outputs.has-changes }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed plugins
+        id: detect
+        run: |
+          set -euo pipefail
+          KNOWN="$KNOWN_PLUGINS"
+          CHANGED=""
+          FILES=""
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Manual trigger: build all plugins
+            CHANGED="$KNOWN"
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
+            # PR: compare against base branch (three-dot = changes in HEAD since divergence)
+            git fetch origin "${{ github.base_ref }}" --depth=1
+            FILES=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD" 2>/dev/null || echo "")
+          else
+            # Push to master: compare before/after SHAs
+            BEFORE="${{ github.event.before }}"
+            AFTER="${{ github.event.after }}"
+            if [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+              FILES=$(git diff --name-only "$BEFORE..$AFTER" 2>/dev/null || echo "")
+            else
+              # First push or force push: fall back to HEAD~1
+              FILES=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
+            fi
+          fi
+
+          # Extract plugin names from changed file paths (top-level dir match)
+          if [ -z "$CHANGED" ] && [ -n "$FILES" ]; then
+            for p in $KNOWN; do
+              if echo "$FILES" | grep -qE "^${p}/"; then
+                CHANGED="$CHANGED $p"
+              fi
+            done
+          fi
+
+          CHANGED=$(echo $CHANGED | xargs)  # trim whitespace
+
+          if [ -z "$CHANGED" ]; then
+            echo "plugins=[]" >> $GITHUB_OUTPUT
+            echo "has-changes=false" >> $GITHUB_OUTPUT
+            echo "No plugin changes detected."
+          else
+            MATRIX=$(echo "$CHANGED" | tr ' ' '\n' | jq -R . | jq -cs .)
+            echo "plugins=$MATRIX" >> $GITHUB_OUTPUT
+            echo "has-changes=true" >> $GITHUB_OUTPUT
+            echo "Changed plugins: $CHANGED"
+          fi
+
+  # ── test ────────────────────────────────────────────────────────────
+  # Run tests + typecheck + build for changed plugins only, on all 3 OS.
+  # Skipped entirely when no plugin changed (avoids 15 wasted runners).
   test:
     name: ${{ matrix.plugin }} (${{ matrix.os }})
+    needs: detect
+    if: needs.detect.outputs.has-changes == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        plugin: [files, kanban, mail, notes, terminal]
+        plugin: ${{ fromJson(needs.detect.outputs.plugins) }}
         os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
@@ -53,3 +123,132 @@ jobs:
       - name: Build
         working-directory: ${{ matrix.plugin }}
         run: npm run build
+
+  # ── release ─────────────────────────────────────────────────────────
+  # Tag and publish a GitHub release per changed plugin (push to master only).
+  # Each release gets a tarball containing the built plugin (minus dev files).
+  # Fails if the tag already exists — enforces version bump discipline.
+  release:
+    name: Release ${{ matrix.plugin }}
+    needs: [detect, test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master' && needs.detect.outputs.has-changes == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: ${{ fromJson(needs.detect.outputs.plugins) }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ matrix.plugin }}/package.json
+
+      - name: Read version from manifest
+        id: version
+        working-directory: ${{ matrix.plugin }}
+        run: |
+          VERSION=$(jq -r '.version' manifest.json)
+          TAG="${{ matrix.plugin }}-v${VERSION}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Plugin: ${{ matrix.plugin }}, version: $VERSION, tag: $TAG"
+
+      - name: Check tag does not already exist
+        run: |
+          if git rev-parse "refs/tags/${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+            echo "::error::Tag ${{ steps.version.outputs.tag }} already exists. Bump the version in ${{ matrix.plugin }}/manifest.json before merging."
+            exit 1
+          fi
+
+      - name: Install + build
+        working-directory: ${{ matrix.plugin }}
+        run: |
+          npm install
+          npm run build
+          npm prune --production
+
+      - name: Create distribution tarball
+        run: |
+          tar czf "${{ matrix.plugin }}-${{ steps.version.outputs.version }}.tar.gz" \
+            --exclude='tests' \
+            --exclude='*.test.*' \
+            --exclude='*.spec.*' \
+            --exclude='tsconfig.json' \
+            --exclude='vitest.config.ts' \
+            --exclude='ui-src' \
+            --exclude='vite.config.ts' \
+            --exclude='components.json' \
+            --exclude='db' \
+            --exclude='shared' \
+            --exclude='package-lock.json' \
+            --exclude='.gitignore' \
+            -C "${{ matrix.plugin }}" .
+
+      - name: Create tag + GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            "${{ matrix.plugin }}-${{ steps.version.outputs.version }}.tar.gz" \
+            --title "${{ matrix.plugin }} v${{ steps.version.outputs.version }}" \
+            --notes "Built from commit ${{ github.sha }}" \
+            --target master
+
+  # ── publish-versions ────────────────────────────────────────────────
+  # Update versions.json with the latest version + tag per changed plugin.
+  # Commits with [skip ci] so the commit doesn't re-trigger this workflow.
+  # Skipped if any release failed (versions.json stays in sync with reality).
+  publish-versions:
+    name: Update versions.json
+    needs: [detect, release]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master' && needs.detect.outputs.has-changes == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          token: ${{ github.token }}
+          fetch-depth: 0
+
+      - name: Update versions.json
+        env:
+          PLUGINS: ${{ needs.detect.outputs.plugins }}
+        run: |
+          set -euo pipefail
+          
+          # Pull latest in case anything changed since detect ran
+          git pull --rebase origin master 2>/dev/null || true
+          
+          # Update versions.json for each changed plugin
+          echo "$PLUGINS" | jq -r '.[]' | while read plugin; do
+            VERSION=$(jq -r '.version' "${plugin}/manifest.json")
+            TAG="${plugin}-v${VERSION}"
+            TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+            
+            jq --arg plugin "$plugin" \
+               --arg version "$VERSION" \
+               --arg tag "$TAG" \
+               --arg ts "$TIMESTAMP" \
+               '.[$plugin] = {version: $version, tag: $tag, releasedAt: $ts}' \
+               versions.json > versions.json.tmp && mv versions.json.tmp versions.json
+            
+            echo "Updated $plugin → $VERSION (tag: $TAG)"
+          done
+          
+          # Check if versions.json actually changed
+          if git diff --quiet versions.json; then
+            echo "versions.json unchanged — already up to date."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add versions.json
+            git commit -m "chore: update versions.json [skip ci]"
+            git push
+            echo "versions.json updated and pushed."
+          fi
