@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - master
+      - v2
   workflow_dispatch:
 
 permissions:
@@ -16,14 +17,10 @@ concurrency:
 
 env:
   CI: true
-  NODE_VERSION: "24"
-  KNOWN_PLUGINS: "files kanban mail notes terminal"
+  GO_VERSION: "1.26"
+  KNOWN_PLUGINS: "files kanban notes terminal"
 
 jobs:
-  # ── detect ──────────────────────────────────────────────────────────
-  # Find which plugin directories changed vs the previous commit (push),
-  # the base branch (PR), or all of them (manual dispatch).
-  # Outputs a JSON array like ["files","notes"] for downstream matrix jobs.
   detect:
     name: Detect changed plugins
     runs-on: ubuntu-latest
@@ -44,25 +41,20 @@ jobs:
           FILES=""
 
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            # Manual trigger: build all plugins
             CHANGED="$KNOWN"
           elif [ "${{ github.event_name }}" = "pull_request" ]; then
-            # PR: compare against base branch (three-dot = changes in HEAD since divergence)
             git fetch origin "${{ github.base_ref }}" --depth=1
             FILES=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD" 2>/dev/null || echo "")
           else
-            # Push to master: compare before/after SHAs
             BEFORE="${{ github.event.before }}"
             AFTER="${{ github.event.after }}"
             if [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
               FILES=$(git diff --name-only "$BEFORE..$AFTER" 2>/dev/null || echo "")
             else
-              # First push or force push: fall back to HEAD~1
               FILES=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
             fi
           fi
 
-          # Extract plugin names from changed file paths (top-level dir match)
           if [ -z "$CHANGED" ] && [ -n "$FILES" ]; then
             for p in $KNOWN; do
               if echo "$FILES" | grep -qE "^${p}/"; then
@@ -71,7 +63,7 @@ jobs:
             done
           fi
 
-          CHANGED=$(echo $CHANGED | xargs)  # trim whitespace
+          CHANGED=$(echo $CHANGED | xargs)
 
           if [ -z "$CHANGED" ]; then
             echo "plugins=[]" >> $GITHUB_OUTPUT
@@ -84,15 +76,12 @@ jobs:
             echo "Changed plugins: $CHANGED"
           fi
 
-  # ── test ────────────────────────────────────────────────────────────
-  # Run tests + typecheck + build for changed plugins only, on all 3 OS.
-  # Skipped entirely when no plugin changed (avoids 15 wasted runners).
   test:
     name: ${{ matrix.plugin }} (${{ matrix.os }})
     needs: detect
     if: needs.detect.outputs.has-changes == 'true'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -102,32 +91,23 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-go@v6
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: ${{ matrix.plugin }}/package.json
-
-      - name: Install dependencies
-        working-directory: ${{ matrix.plugin }}
-        run: npm install
-
-      - name: Run tests
-        working-directory: ${{ matrix.plugin }}
-        run: npm test
-
-      - name: Typecheck
-        working-directory: ${{ matrix.plugin }}
-        run: npm run typecheck --if-present
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            mcpkit/go.sum
+            ${{ matrix.plugin }}/mcp/go.sum
 
       - name: Build
-        working-directory: ${{ matrix.plugin }}
-        run: npm run build
+        working-directory: ${{ matrix.plugin }}/mcp
+        run: |
+          go build -o server .
+          go vet ./...
 
-  # ── release ─────────────────────────────────────────────────────────
-  # Tag and publish a GitHub release per changed plugin (push to master only).
-  # Each release gets a tarball containing the built plugin (minus dev files).
-  # Fails if the tag already exists — enforces version bump discipline.
+      - name: Test
+        working-directory: ${{ matrix.plugin }}/mcp
+        run: go test ./...
+
   release:
     name: Release ${{ matrix.plugin }}
     needs: [detect, test]
@@ -143,11 +123,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-go@v6
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: ${{ matrix.plugin }}/package.json
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            mcpkit/go.sum
+            ${{ matrix.plugin }}/mcp/go.sum
 
       - name: Read version from manifest
         id: version
@@ -166,24 +147,16 @@ jobs:
             exit 1
           fi
 
-      - name: Install + build
-        working-directory: ${{ matrix.plugin }}
-        run: |
-          npm install
-          npm run build
-          npm prune --production
+      - name: Build server
+        working-directory: ${{ matrix.plugin }}/mcp
+        run: go build -o server .
 
       - name: Create distribution tarball
         run: |
           tar czf "${{ matrix.plugin }}-${{ steps.version.outputs.version }}.tar.gz" \
             --exclude='tests' \
             --exclude='*.test.*' \
-            --exclude='*.spec.*' \
-            --exclude='tsconfig.json' \
-            --exclude='vitest.config.ts' \
             --exclude='ui-src' \
-            --exclude='vite.config.ts' \
-            --exclude='components.json' \
             --exclude='db' \
             --exclude='shared' \
             --exclude='package-lock.json' \
@@ -200,10 +173,6 @@ jobs:
             --notes "Built from commit ${{ github.sha }}" \
             --target master
 
-  # ── publish-versions ────────────────────────────────────────────────
-  # Update versions.json with the latest version + tag per changed plugin.
-  # Commits with [skip ci] so the commit doesn't re-trigger this workflow.
-  # Skipped if any release failed (versions.json stays in sync with reality).
   publish-versions:
     name: Update versions.json
     needs: [detect, release]
@@ -221,27 +190,16 @@ jobs:
           PLUGINS: ${{ needs.detect.outputs.plugins }}
         run: |
           set -euo pipefail
-          
-          # Pull latest in case anything changed since detect ran
           git pull --rebase origin master 2>/dev/null || true
-          
-          # Update versions.json for each changed plugin
           echo "$PLUGINS" | jq -r '.[]' | while read plugin; do
             VERSION=$(jq -r '.version' "${plugin}/manifest.json")
             TAG="${plugin}-v${VERSION}"
             TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-            
-            jq --arg plugin "$plugin" \
-               --arg version "$VERSION" \
-               --arg tag "$TAG" \
-               --arg ts "$TIMESTAMP" \
-               '.[$plugin] = {version: $version, tag: $tag, releasedAt: $ts}' \
-               versions.json > versions.json.tmp && mv versions.json.tmp versions.json
-            
+            jq --arg plugin "$plugin" --arg version "$VERSION" --arg tag "$TAG" --arg ts "$TIMESTAMP" \
+              '.[$plugin] = {version: $version, tag: $tag, releasedAt: $ts}' \
+              versions.json > versions.json.tmp && mv versions.json.tmp versions.json
             echo "Updated $plugin → $VERSION (tag: $TAG)"
           done
-          
-          # Check if versions.json actually changed
           if git diff --quiet versions.json; then
             echo "versions.json unchanged — already up to date."
           else

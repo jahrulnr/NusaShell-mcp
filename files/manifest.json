@@ -1,7 +1,7 @@
 {
   "id": "nusashell.files",
   "name": "Files",
-  "version": "0.1.1",
+  "version": "2.0.0",
   "icon": "\ud83d\udcc2",
   "ui": {
     "entry": "ui/index.html",
@@ -16,10 +16,8 @@
   },
   "mcp": {
     "transport": "stdio",
-    "command": "node",
-    "args": [
-      "mcp/server.cjs"
-    ],
+    "command": "mcp/server",
+    "args": [],
     "env": {},
     "autostart": false,
     "keepAliveOnClose": false
@@ -32,10 +30,24 @@
         "payloadSchema": {
           "type": "object",
           "properties": {
-            "path": { "type": "string" },
-            "action": { "type": "string", "enum": ["write", "patch", "append", "mkdir", "touch"] }
+            "path": {
+              "type": "string"
+            },
+            "action": {
+              "type": "string",
+              "enum": [
+                "write",
+                "patch",
+                "append",
+                "mkdir",
+                "touch"
+              ]
+            }
           },
-          "required": ["path", "action"]
+          "required": [
+            "path",
+            "action"
+          ]
         }
       },
       {
@@ -44,10 +56,16 @@
         "payloadSchema": {
           "type": "object",
           "properties": {
-            "path": { "type": "string" },
-            "recursive": { "type": "boolean" }
+            "path": {
+              "type": "string"
+            },
+            "recursive": {
+              "type": "boolean"
+            }
           },
-          "required": ["path"]
+          "required": [
+            "path"
+          ]
         }
       },
       {
@@ -56,10 +74,17 @@
         "payloadSchema": {
           "type": "object",
           "properties": {
-            "source": { "type": "string" },
-            "destination": { "type": "string" }
+            "source": {
+              "type": "string"
+            },
+            "destination": {
+              "type": "string"
+            }
           },
-          "required": ["source", "destination"]
+          "required": [
+            "source",
+            "destination"
+          ]
         }
       }
     ]

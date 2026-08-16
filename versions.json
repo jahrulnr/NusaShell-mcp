@@ -1,27 +1,22 @@
 {
   "files": {
-    "version": "0.1.1",
-    "tag": "files-v0.1.1",
+    "version": "2.0.0",
+    "tag": "files-v2.0.0",
     "releasedAt": "2026-08-16T00:00:00Z"
   },
   "kanban": {
-    "version": "1.0.0",
-    "tag": "kanban-v1.0.0",
-    "releasedAt": "2026-08-16T00:00:00Z"
-  },
-  "mail": {
-    "version": "0.1.0",
-    "tag": "mail-v0.1.0",
+    "version": "2.0.0",
+    "tag": "kanban-v2.0.0",
     "releasedAt": "2026-08-16T00:00:00Z"
   },
   "notes": {
-    "version": "1.0.0",
-    "tag": "notes-v1.0.0",
+    "version": "2.0.0",
+    "tag": "notes-v2.0.0",
     "releasedAt": "2026-08-16T00:00:00Z"
   },
   "terminal": {
-    "version": "1.0.0",
-    "tag": "terminal-v1.0.0",
+    "version": "2.0.0",
+    "tag": "terminal-v2.0.0",
     "releasedAt": "2026-08-16T00:00:00Z"
   }
 }

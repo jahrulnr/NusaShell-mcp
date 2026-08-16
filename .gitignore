@@ -2,6 +2,18 @@ node_modules/
 plugins-data/
 *.log
 
+# Go build artifacts
+**/mcp/server
+**/mcp/server.exe
+
+# Go workspace cache
+*.test
+*.out
+
 # Plugin runtime data (managed at runtime under NUSASHELL_USER_DATA)
 notes/notes.json
 kanban/kanban.json
+
+# Test binaries from `go build -o mcp` accidents
+**/mcp/mcp
+**/mcp/mcp.exe

@@ -1,7 +1,7 @@
 {
   "id": "nusashell.notes",
   "name": "Notes",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "icon": "\ud83d\udcdd",
   "ui": {
     "entry": "ui/index.html",
@@ -16,10 +16,8 @@
   },
   "mcp": {
     "transport": "stdio",
-    "command": "node",
-    "args": [
-      "mcp/server.cjs"
-    ],
+    "command": "mcp/server",
+    "args": [],
     "env": {},
     "autostart": true,
     "keepAliveOnClose": false
