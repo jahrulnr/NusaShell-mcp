@@ -460,7 +460,10 @@ func (e *ContextEngine) readWorkspaceInstructions() (map[string]any, bool) {
 
 // detectStack classifies the workspace from manifests at root + one level.
 func (e *ContextEngine) DetectStack(subPath string) (map[string]any, error) {
-	base := resolvePath(e.root, subPath)
+	base, err := resolvePath(e.root, subPath)
+	if err != nil {
+		return nil, err
+	}
 	info := map[string]any{
 		"category":    "documentation",
 		"languages":   []string{},
@@ -968,7 +971,10 @@ func (e *ContextEngine) ContextMap(subPath string, budget int, activeFile, query
 	useRole := role == "planner" || role == "executor" || role == "reviewer"
 	effectiveBudget := allocateRoleBudget(budget, role)
 	started := time.Now()
-	base := resolvePath(e.root, subPath)
+	base, err := resolvePath(e.root, subPath)
+	if err != nil {
+		return nil, err
+	}
 
 	t := time.Now()
 	stack, err := e.DetectStack(subPath)
@@ -1059,7 +1065,10 @@ func min(a, b int) int {
 // ListSymbols lists definitions for one file or top-ranked files matching query.
 func (e *ContextEngine) ListSymbols(filePath, query string, limit int) (map[string]any, error) {
 	if filePath != "" {
-		abs := resolvePath(e.root, filePath)
+		abs, err := resolvePath(e.root, filePath)
+		if err != nil {
+			return nil, err
+		}
 		lang, ok := supportedExts[strings.ToLower(filepath.Ext(abs))]
 		if !ok {
 			return nil, fmt.Errorf("Unsupported file type for symbol extraction: %s", filePath)

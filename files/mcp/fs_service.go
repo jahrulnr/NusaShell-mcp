@@ -318,7 +318,10 @@ type DirEntry struct {
 }
 
 func (s *FileService) ListDir(input string) ([]DirEntry, error) {
-	dir := resolvePath(s.root, input)
+	dir, err := resolvePath(s.root, input)
+	if err != nil {
+		return nil, err
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, s.wrapErr(input, err)
@@ -374,7 +377,10 @@ func (s *FileService) Tree(input string, depth int, exclude []string, includeFil
 	if depth > maxTreeDepth {
 		depth = maxTreeDepth
 	}
-	dir := resolvePath(s.root, input)
+	dir, err := resolvePath(s.root, input)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := os.Stat(dir); err != nil {
 		return nil, s.wrapErr(input, err)
 	}
@@ -436,7 +442,10 @@ type ReadResult struct {
 }
 
 func (s *FileService) ReadFile(input string, opts ReadOpts) (*ReadResult, error) {
-	filePath := resolvePath(s.root, input)
+	filePath, err := resolvePath(s.root, input)
+	if err != nil {
+		return nil, err
+	}
 	stat, err := os.Stat(filePath)
 	if err != nil {
 		return nil, s.wrapErr(input, err)
@@ -540,7 +549,10 @@ type ReadOpts struct {
 }
 
 func (s *FileService) WriteFile(input, content string, encoding string) (map[string]any, error) {
-	filePath := resolvePath(s.root, input)
+	filePath, err := resolvePath(s.root, input)
+	if err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
 		return nil, err
 	}
@@ -564,7 +576,10 @@ func (s *FileService) WriteFile(input, content string, encoding string) (map[str
 }
 
 func (s *FileService) MakeDir(input string) (map[string]any, error) {
-	dirPath := resolvePath(s.root, input)
+	dirPath, err := resolvePath(s.root, input)
+	if err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(dirPath, 0o755); err != nil {
 		return nil, err
 	}
@@ -575,8 +590,14 @@ func (s *FileService) MakeDir(input string) (map[string]any, error) {
 }
 
 func (s *FileService) MoveFile(source, destination string) (map[string]any, error) {
-	src := resolvePath(s.root, source)
-	dst := resolvePath(s.root, destination)
+	src, err := resolvePath(s.root, source)
+	if err != nil {
+		return nil, err
+	}
+	dst, err := resolvePath(s.root, destination)
+	if err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return nil, err
 	}
@@ -591,8 +612,14 @@ func (s *FileService) MoveFile(source, destination string) (map[string]any, erro
 }
 
 func (s *FileService) CopyFile(source, destination string) (map[string]any, error) {
-	src := resolvePath(s.root, source)
-	dst := resolvePath(s.root, destination)
+	src, err := resolvePath(s.root, source)
+	if err != nil {
+		return nil, err
+	}
+	dst, err := resolvePath(s.root, destination)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := os.Stat(src); err != nil {
 		return nil, s.wrapErr(source, err)
 	}
@@ -634,7 +661,10 @@ func copyRecursive(src, dst string) error {
 }
 
 func (s *FileService) DeleteFile(input string, recursive bool) (map[string]any, error) {
-	target := resolvePath(s.root, input)
+	target, err := resolvePath(s.root, input)
+	if err != nil {
+		return nil, err
+	}
 	stat, err := os.Stat(target)
 	if err != nil {
 		return nil, s.wrapErr(input, err)
@@ -671,7 +701,10 @@ func (s *FileService) SearchFiles(input, pattern string, exclude []string, ftype
 	if maxDepth <= 0 {
 		maxDepth = 10
 	}
-	dir := resolvePath(s.root, input)
+	dir, err := resolvePath(s.root, input)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := os.Stat(dir); err != nil {
 		return nil, s.wrapErr(input, err)
 	}
@@ -745,7 +778,10 @@ type GrepResult struct {
 }
 
 func (s *FileService) GrepFiles(input, pattern string, opts GrepOpts) (map[string]any, error) {
-	target := resolvePath(s.root, input)
+	target, err := resolvePath(s.root, input)
+	if err != nil {
+		return nil, err
+	}
 	stat, err := os.Stat(target)
 	if err != nil {
 		return nil, s.wrapErr(input, err)
@@ -886,7 +922,10 @@ func (s *FileService) grepRecursive(dir string, re, globRe *regexp.Regexp, resul
 }
 
 func (s *FileService) FileInfo(input string) (map[string]any, error) {
-	filePath := resolvePath(s.root, input)
+	filePath, err := resolvePath(s.root, input)
+	if err != nil {
+		return nil, err
+	}
 	stat, err := os.Stat(filePath)
 	if err != nil {
 		return nil, s.wrapErr(input, err)
@@ -912,7 +951,10 @@ func (s *FileService) FileInfo(input string) (map[string]any, error) {
 }
 
 func (s *FileService) PatchFile(input string, edits []PatchEdit, preview bool) (map[string]any, error) {
-	filePath := resolvePath(s.root, input)
+	filePath, err := resolvePath(s.root, input)
+	if err != nil {
+		return nil, err
+	}
 	stat, err := os.Stat(filePath)
 	if err != nil {
 		return nil, s.wrapErr(input, err)
@@ -977,7 +1019,10 @@ type PatchEdit struct {
 }
 
 func (s *FileService) AppendFile(input, content string) (map[string]any, error) {
-	filePath := resolvePath(s.root, input)
+	filePath, err := resolvePath(s.root, input)
+	if err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
 		return nil, err
 	}
@@ -992,7 +1037,10 @@ func (s *FileService) AppendFile(input, content string) (map[string]any, error) 
 }
 
 func (s *FileService) ExistsFile(input string) (map[string]any, error) {
-	filePath := resolvePath(s.root, input)
+	filePath, err := resolvePath(s.root, input)
+	if err != nil {
+		return nil, err
+	}
 	stat, err := os.Stat(filePath)
 	if err != nil {
 		return map[string]any{
@@ -1011,7 +1059,10 @@ func (s *FileService) ExistsFile(input string) (map[string]any, error) {
 }
 
 func (s *FileService) TouchFile(input string, createParents, updateOnly bool) (map[string]any, error) {
-	filePath := resolvePath(s.root, input)
+	filePath, resolveErr := resolvePath(s.root, input)
+	if resolveErr != nil {
+		return nil, resolveErr
+	}
 	_, err := os.Stat(filePath)
 	if err != nil {
 		if updateOnly {

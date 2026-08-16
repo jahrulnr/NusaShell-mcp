@@ -526,7 +526,11 @@ func (e *RetrievalEngine) searchRelevant(query string, topK int, scope string, r
 	}
 	searchRoot := e.root
 	if scope != "" {
-		searchRoot = resolvePath(e.root, scope)
+		resolved, err := resolvePath(e.root, scope)
+		if err != nil {
+			return map[string]any{"error": err.Error()}
+		}
+		searchRoot = resolved
 	}
 	chunks, filesScanned, cacheHits, cacheMisses := e.loadChunks(searchRoot, refresh)
 
