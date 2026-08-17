@@ -9,14 +9,14 @@ import (
 )
 
 func TestResolvePathRejectsRelative(t *testing.T) {
-	_, err := resolvePath("/tmp/root", "tmp/x.md")
+	_, err := resolvePath("tmp/x.md")
 	if err == nil || !strings.Contains(err.Error(), "absolute path required") {
 		t.Fatalf("expected absolute-path error, got %v", err)
 	}
 }
 
 func TestResolvePathRejectsEmpty(t *testing.T) {
-	_, err := resolvePath("/tmp/root", "")
+	_, err := resolvePath("")
 	if err == nil {
 		t.Fatalf("expected error for empty path (forced explicitness)")
 	}
@@ -29,7 +29,7 @@ func TestResolvePathAcceptsAbsolute(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		abs = filepath.Join("C:\\", filepath.Base(t.TempDir()))
 	}
-	p, err := resolvePath(t.TempDir(), abs)
+	p, err := resolvePath(abs)
 	if err != nil {
 		t.Fatalf("absolute should pass: %v", err)
 	}

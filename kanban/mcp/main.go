@@ -17,7 +17,7 @@ func main() {
 	store.Load()
 	store.GetOrCreateDefaultProject()
 
-	s := server.NewMCPServer("nusashell-kanban", "2.0.0",
+	s := server.NewMCPServer("nusashell-kanban", "2.0.1",
 		server.WithToolCapabilities(true),
 		server.WithPromptCapabilities(false),
 	)

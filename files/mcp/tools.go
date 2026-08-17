@@ -119,13 +119,15 @@ func registerTools(s *server.MCPServer, svc *FileService) {
 
 	// grep
 	s.AddTool(mcp.NewTool("grep",
-		mcp.WithDescription("Search file contents for a regex pattern (like grep). path may be a directory (recursive) or a single file."),
+		mcp.WithDescription("Search file contents for a regex pattern (like grep). path may be a directory (recursive) or a single file. "+
+			"output_mode: 'content' (default, returns matching lines with context), 'files_with_matches' (returns just file paths that contain matches), 'count' (returns per-file match counts)."),
 		mcp.WithString("path", mcp.Description("Directory or single file to search.")),
 		mcp.WithString("pattern", mcp.Required(), mcp.Description("Regular expression pattern.")),
 		mcp.WithString("glob", mcp.Description("Optional file name glob filter (e.g. '*.js').")),
 		mcp.WithNumber("before", mcp.Description("Context lines before match (0-10)."), mcp.Min(0.0), mcp.Max(10.0)),
 		mcp.WithNumber("after", mcp.Description("Context lines after match (0-10)."), mcp.Min(0.0), mcp.Max(10.0)),
 		mcp.WithBoolean("ignoreCase", mcp.Description("Case-insensitive matching.")),
+		mcp.WithString("output_mode", mcp.Description("Output shape: 'content' (default, matching lines), 'files_with_matches' (just file paths), 'count' (per-file match counts)."), mcp.Enum("content", "files_with_matches", "count")),
 		mcp.WithArray("exclude",
 			mcp.Description("Glob patterns to exclude."),
 			mcp.MaxItems(20),
@@ -137,10 +139,13 @@ func registerTools(s *server.MCPServer, svc *FileService) {
 
 	// patch — edits accepts a single edit object or an array of edits (oneOf).
 	s.AddTool(mcp.NewTool("patch",
-		mcp.WithDescription("Replace one or more string occurrences in a file. Supports replace_all and preview mode."),
+		mcp.WithDescription("Replace one or more string occurrences in a file. "+
+			"By default old_string must match exactly once; if it matches multiple times the call fails with the line numbers of every match. "+
+			"Disambiguate duplicates with replace_all=true, occurrence_index=N (1-based), or context_before/context_after (anchor text immediately before/after the match). "+
+			"Supports preview mode."),
 		mcp.WithString("path", mcp.Required(), mcp.Description("File path.")),
 		mcp.WithAny("edits",
-			mcp.Description("A single edit object or an array of edits. Each edit: { old_string, new_string, replace_all }."),
+			mcp.Description("A single edit object or an array of edits. Each edit: { old_string, new_string, replace_all?, occurrence_index?, context_before?, context_after? }."),
 			mcp.Required(),
 		),
 		mcp.WithBoolean("preview", mcp.Description("If true, return patched content without writing.")),
@@ -407,6 +412,7 @@ func handleGrep(svc *FileService) server.ToolHandlerFunc {
 		args := req.GetArguments()
 		path, _ := args["path"].(string)
 		pattern, _ := args["pattern"].(string)
+		outputMode, _ := args["output_mode"].(string)
 		opts := GrepOpts{
 			Glob:       getString(args, "glob"),
 			Before:     toIntOr(args["before"], 0),
@@ -414,12 +420,24 @@ func handleGrep(svc *FileService) server.ToolHandlerFunc {
 			IgnoreCase: toBool(args["ignoreCase"]),
 			Exclude:    toStringSlice(args["exclude"]),
 			MaxResults: toIntOr(args["maxResults"], 500),
+			OutputMode: outputMode,
 		}
 		result, err := svc.GrepFiles(path, pattern, opts)
 		if err != nil {
 			return errorResult(err.Error()), nil
 		}
-		data := map[string]any{"path": path, "pattern": pattern, "results": result["results"], "meta": result["meta"]}
+		// Forward the mode-specific keys (results / files / counts) plus
+		// the common meta. The text summary uses the same data map.
+		data := map[string]any{
+			"path":    path,
+			"pattern": pattern,
+			"meta":    result["meta"],
+		}
+		for _, key := range []string{"results", "files", "counts"} {
+			if v, ok := result[key]; ok {
+				data[key] = v
+			}
+		}
 		return textAndJSON(formatFilesToolText("grep", data), data)
 	}
 }
@@ -466,6 +484,16 @@ func parsePatchEdit(m map[string]any) PatchEdit {
 	}
 	if v, ok := m["replace_all"].(bool); ok {
 		e.ReplaceAll = v
+	}
+	if v, ok := toInt(m["occurrence_index"]); ok {
+		idx := v
+		e.OccurrenceIndex = &idx
+	}
+	if v, ok := m["context_before"].(string); ok {
+		e.ContextBefore = v
+	}
+	if v, ok := m["context_after"].(string); ok {
+		e.ContextAfter = v
 	}
 	return e
 }

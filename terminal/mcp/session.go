@@ -167,7 +167,7 @@ type MissingSessionError struct{ ID string }
 func (e *MissingSessionError) Error() string { return "Session not found: " + e.ID }
 
 // OpenSession creates a new interactive PTY session.
-func OpenSession(mgr *SessionManager, shell string, cwd string, cols, rows int) (*Session, error) {
+func OpenSession(mgr *SessionManager, shell string, cwd string, cols, rows int, extraEnv []string) (*Session, error) {
 	resolved := ResolveShell(shell)
 	if !resolved.Available {
 		return nil, &ShellUnavailableError{Shell: shell}
@@ -198,6 +198,7 @@ func OpenSession(mgr *SessionManager, shell string, cwd string, cols, rows int) 
 		"TERM=xterm-256color",
 		"COLORTERM=truecolor",
 	))
+	cmd.Env = append(cmd.Env, extraEnv...)
 
 	ptyFile, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
 	if err != nil {

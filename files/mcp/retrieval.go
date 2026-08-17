@@ -539,7 +539,7 @@ func (e *RetrievalEngine) searchRelevantContext(ctx context.Context, query strin
 	e.mu.RUnlock()
 	searchRoot := root
 	if scope != "" {
-		resolved, err := resolvePath(root, scope)
+		resolved, err := resolvePath(scope)
 		if err != nil {
 			return map[string]any{"error": err.Error()}
 		}
@@ -598,10 +598,6 @@ func (e *RetrievalEngine) loadChunksContext(ctx context.Context, dir string, ref
 	var chunks []retrievalChunk
 	filesScanned, cacheHits, cacheMisses := 0, 0, 0
 
-	e.mu.RLock()
-	root := e.root
-	e.mu.RUnlock()
-
 	var walk func(string) error
 	walk = func(current string) error {
 		if err := ctx.Err(); err != nil {
@@ -635,7 +631,7 @@ func (e *RetrievalEngine) loadChunksContext(ctx context.Context, dir string, ref
 				continue
 			}
 			full := filepath.Join(current, entry.Name())
-			rel := relativePosix(root, full, entry.Name())
+			rel := absPath(full, entry.Name())
 			filesScanned++
 			stat, err := os.Stat(full)
 			if err != nil {

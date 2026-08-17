@@ -336,7 +336,7 @@ func randomSuffix() string {
 
 func (s *FileService) wrapErr(input string, err error) error {
 	if os.IsNotExist(err) {
-		return fmt.Errorf("%s. Path not found. Files plugin root is %q. Use paths relative to that root (e.g. \"\" for root, \"Documents\" for a subdirectory).", err.Error(), s.root)
+		return fmt.Errorf("%s. Path not found: %q. Pass an absolute path.", err.Error(), input)
 	}
 	return err
 }
@@ -355,7 +355,7 @@ type DirEntry struct {
 }
 
 func (s *FileService) ListDir(input string) ([]DirEntry, error) {
-	dir, err := resolvePath(s.root, input)
+	dir, err := resolvePath(input)
 	if err != nil {
 		return nil, err
 	}
@@ -376,7 +376,7 @@ func (s *FileService) ListDir(input string) ([]DirEntry, error) {
 		isDir := entry.IsDir()
 		items = append(items, DirEntry{
 			Name:      entry.Name(),
-			Path:      relativePosix(s.root, entryPath, entry.Name()),
+			Path:      absPath(entryPath, entry.Name()),
 			IsDir:     isDir,
 			IsFile:    !isDir,
 			IsSymlink: entry.Type()&os.ModeSymlink != 0,
@@ -414,7 +414,7 @@ func (s *FileService) Tree(input string, depth int, exclude []string, includeFil
 	if depth > maxTreeDepth {
 		depth = maxTreeDepth
 	}
-	dir, err := resolvePath(s.root, input)
+	dir, err := resolvePath(input)
 	if err != nil {
 		return nil, err
 	}
@@ -448,7 +448,7 @@ func (s *FileService) buildTree(dir string, depth int, exclude []string, include
 		}
 		node := TreeNode{
 			Name:     entry.Name(),
-			Path:     relativePosix(s.root, entryPath, entry.Name()),
+			Path:     absPath(entryPath, entry.Name()),
 			IsDir:    isDir,
 			Size:     cond(isDir, 0, info.Size()),
 			Modified: info.ModTime().UTC().Format(time.RFC3339),
@@ -480,7 +480,7 @@ type ReadResult struct {
 
 func (s *FileService) ReadFile(input string, opts ReadOpts) (*ReadResult, error) {
 	started := time.Now()
-	filePath, err := resolvePath(s.root, input)
+	filePath, err := resolvePath(input)
 	if err != nil {
 		return nil, err
 	}
@@ -760,7 +760,7 @@ type ReadOpts struct {
 }
 
 func (s *FileService) WriteFile(input, content string, encoding string) (map[string]any, error) {
-	filePath, err := resolvePath(s.root, input)
+	filePath, err := resolvePath(input)
 	if err != nil {
 		return nil, err
 	}
@@ -781,13 +781,13 @@ func (s *FileService) WriteFile(input, content string, encoding string) (map[str
 		return nil, err
 	}
 	return map[string]any{
-		"path":    relativePosix(s.root, filePath, filepath.Base(filePath)),
+		"path":    absPath(filePath, filepath.Base(filePath)),
 		"written": true,
 	}, nil
 }
 
 func (s *FileService) MakeDir(input string) (map[string]any, error) {
-	dirPath, err := resolvePath(s.root, input)
+	dirPath, err := resolvePath(input)
 	if err != nil {
 		return nil, err
 	}
@@ -795,17 +795,17 @@ func (s *FileService) MakeDir(input string) (map[string]any, error) {
 		return nil, err
 	}
 	return map[string]any{
-		"path":    relativePosix(s.root, dirPath, filepath.Base(dirPath)),
+		"path":    absPath(dirPath, filepath.Base(dirPath)),
 		"created": true,
 	}, nil
 }
 
 func (s *FileService) MoveFile(source, destination string) (map[string]any, error) {
-	src, err := resolvePath(s.root, source)
+	src, err := resolvePath(source)
 	if err != nil {
 		return nil, err
 	}
-	dst, err := resolvePath(s.root, destination)
+	dst, err := resolvePath(destination)
 	if err != nil {
 		return nil, err
 	}
@@ -816,18 +816,18 @@ func (s *FileService) MoveFile(source, destination string) (map[string]any, erro
 		return nil, s.wrapErr(source, err)
 	}
 	return map[string]any{
-		"from":  relativePosix(s.root, src, filepath.Base(src)),
-		"to":    relativePosix(s.root, dst, filepath.Base(dst)),
+		"from":  absPath(src, filepath.Base(src)),
+		"to":    absPath(dst, filepath.Base(dst)),
 		"moved": true,
 	}, nil
 }
 
 func (s *FileService) CopyFile(source, destination string) (map[string]any, error) {
-	src, err := resolvePath(s.root, source)
+	src, err := resolvePath(source)
 	if err != nil {
 		return nil, err
 	}
-	dst, err := resolvePath(s.root, destination)
+	dst, err := resolvePath(destination)
 	if err != nil {
 		return nil, err
 	}
@@ -838,8 +838,8 @@ func (s *FileService) CopyFile(source, destination string) (map[string]any, erro
 		return nil, err
 	}
 	return map[string]any{
-		"from":   relativePosix(s.root, src, filepath.Base(src)),
-		"to":     relativePosix(s.root, dst, filepath.Base(dst)),
+		"from":   absPath(src, filepath.Base(src)),
+		"to":     absPath(dst, filepath.Base(dst)),
 		"copied": true,
 	}, nil
 }
@@ -876,7 +876,7 @@ func copyRecursive(src, dst string) error {
 }
 
 func (s *FileService) DeleteFile(input string, recursive bool) (map[string]any, error) {
-	target, err := resolvePath(s.root, input)
+	target, err := resolvePath(input)
 	if err != nil {
 		return nil, err
 	}
@@ -897,7 +897,7 @@ func (s *FileService) DeleteFile(input string, recursive bool) (map[string]any, 
 		return nil, err
 	}
 	return map[string]any{
-		"path":    relativePosix(s.root, target, filepath.Base(target)),
+		"path":    absPath(target, filepath.Base(target)),
 		"deleted": true,
 	}, nil
 }
@@ -916,7 +916,7 @@ func (s *FileService) SearchFiles(input, pattern string, exclude []string, ftype
 	if maxDepth <= 0 {
 		maxDepth = 10
 	}
-	dir, err := resolvePath(s.root, input)
+	dir, err := resolvePath(input)
 	if err != nil {
 		return nil, err
 	}
@@ -970,7 +970,7 @@ func (s *FileService) searchRecursive(dir string, re *regexp.Regexp, results *[]
 			}
 			*results = append(*results, SearchResult{
 				Name:     entry.Name(),
-				Path:     relativePosix(s.root, entryPath, entry.Name()),
+				Path:     absPath(entryPath, entry.Name()),
 				IsDir:    isDir,
 				Size:     cond(isDir, 0, info.Size()),
 				Modified: info.ModTime().UTC().Format(time.RFC3339),
@@ -994,7 +994,7 @@ type GrepResult struct {
 
 func (s *FileService) GrepFiles(input, pattern string, opts GrepOpts) (map[string]any, error) {
 	started := time.Now()
-	target, err := resolvePath(s.root, input)
+	target, err := resolvePath(input)
 	if err != nil {
 		return nil, err
 	}
@@ -1022,29 +1022,72 @@ func (s *FileService) GrepFiles(input, pattern string, opts GrepOpts) (map[strin
 		cap = maxSearchResults
 	}
 
+	// For files_with_matches and count modes, skip context lines — they
+	// are never returned and collecting them wastes I/O on large matches.
+	before, after := opts.Before, opts.After
+	if opts.OutputMode == "files_with_matches" || opts.OutputMode == "count" {
+		before, after = 0, 0
+	}
+
 	var results []GrepResult
 	if !stat.IsDir() {
 		name := filepath.Base(target)
 		if globRe == nil || globRe.MatchString(name) {
-			s.grepOneFile(target, name, re, &results, opts.Before, opts.After, cap)
+			s.grepOneFile(target, name, re, &results, before, after, cap)
 		}
 	} else {
-		s.grepRecursive(target, re, globRe, &results, opts.Before, opts.After, opts.Exclude, cap)
+		s.grepRecursive(target, re, globRe, &results, before, after, opts.Exclude, cap)
 	}
 
 	truncated := len(results) > cap
 	if len(results) > cap {
 		results = results[:cap]
 	}
-	stderr("grep %s (input=%q, %d results) took %s", target, input, len(results), time.Since(started).Round(time.Millisecond))
-	return map[string]any{
-		"results": results,
-		"meta": map[string]any{
-			"truncated": truncated,
-			"count":     len(results),
-			"cap":       cap,
-		},
-	}, nil
+	stderr("grep %s (input=%q, mode=%s, %d results) took %s", target, input, opts.OutputMode, len(results), time.Since(started).Round(time.Millisecond))
+
+	switch opts.OutputMode {
+	case "files_with_matches":
+		seen := make(map[string]bool, len(results))
+		files := make([]string, 0, len(results))
+		for _, r := range results {
+			if !seen[r.Path] {
+				seen[r.Path] = true
+				files = append(files, r.Path)
+			}
+		}
+		return map[string]any{
+			"files": files,
+			"meta": map[string]any{
+				"truncated": truncated,
+				"count":     len(files),
+				"cap":       cap,
+			},
+		}, nil
+	case "count":
+		counts := make(map[string]int, len(results))
+		for _, r := range results {
+			counts[r.Path]++
+		}
+		return map[string]any{
+			"counts": counts,
+			"meta": map[string]any{
+				"truncated":    truncated,
+				"totalMatches": len(results),
+				"fileCount":    len(counts),
+				"cap":          cap,
+			},
+		}, nil
+	default:
+		// "content" or unrecognized → return full results (backward compat).
+		return map[string]any{
+			"results": results,
+			"meta": map[string]any{
+				"truncated": truncated,
+				"count":     len(results),
+				"cap":       cap,
+			},
+		}, nil
+	}
 }
 
 // GrepOpts holds optional parameters for GrepFiles.
@@ -1055,6 +1098,7 @@ type GrepOpts struct {
 	IgnoreCase bool
 	Exclude    []string
 	MaxResults int
+	OutputMode string // "content" (default), "files_with_matches", "count"
 }
 
 func (s *FileService) grepOneFile(entryPath, entryName string, re *regexp.Regexp, results *[]GrepResult, before, after, cap int) {
@@ -1094,7 +1138,7 @@ func (s *FileService) grepOneFile(entryPath, entryName string, re *regexp.Regexp
 				content = content[:maxGrepLineLen] + "…(truncated)"
 			}
 			result := GrepResult{
-				Path:    relativePosix(s.root, entryPath, entryName),
+				Path:    absPath(entryPath, entryName),
 				Line:    i + 1,
 				Content: content,
 			}
@@ -1145,7 +1189,7 @@ func (s *FileService) grepRecursive(dir string, re, globRe *regexp.Regexp, resul
 }
 
 func (s *FileService) FileInfo(input string) (map[string]any, error) {
-	filePath, err := resolvePath(s.root, input)
+	filePath, err := resolvePath(input)
 	if err != nil {
 		return nil, err
 	}
@@ -1161,7 +1205,7 @@ func (s *FileService) FileInfo(input string) (map[string]any, error) {
 	}
 	return map[string]any{
 		"name":        filepath.Base(filePath),
-		"path":        relativePosix(s.root, filePath, filepath.Base(filePath)),
+		"path":        absPath(filePath, filepath.Base(filePath)),
 		"isDir":       isDir,
 		"isFile":      !isDir,
 		"isSymlink":   stat.Mode()&os.ModeSymlink != 0,
@@ -1174,7 +1218,7 @@ func (s *FileService) FileInfo(input string) (map[string]any, error) {
 }
 
 func (s *FileService) PatchFile(input string, edits []PatchEdit, preview bool) (map[string]any, error) {
-	filePath, err := resolvePath(s.root, input)
+	filePath, err := resolvePath(input)
 	if err != nil {
 		return nil, err
 	}
@@ -1197,25 +1241,22 @@ func (s *FileService) PatchFile(input string, edits []PatchEdit, preview bool) (
 	str := string(content)
 
 	occurrences := []int{}
-	for _, edit := range edits {
+	for i, edit := range edits {
 		if !strings.Contains(str, edit.OldString) {
-			return nil, fmt.Errorf("old_string not found in file. Ensure the string matches exactly, including whitespace and indentation. (edit %d of %d)", len(occurrences)+1, len(edits))
+			return nil, fmt.Errorf("old_string not found in file. Ensure the string matches exactly, including whitespace and indentation. (edit %d of %d)", i+1, len(edits))
 		}
-		count := 0
-		if edit.ReplaceAll {
-			parts := strings.Split(str, edit.OldString)
-			count = len(parts) - 1
-			str = strings.Join(parts, edit.NewString)
-		} else {
-			str = strings.Replace(str, edit.OldString, edit.NewString, 1)
-			count = 1
+
+		count, replaced, err := applyPatchEdit(&str, edit)
+		if err != nil {
+			return nil, fmt.Errorf("%s (edit %d of %d)", err.Error(), i+1, len(edits))
 		}
+		_ = replaced
 		occurrences = append(occurrences, count)
 	}
 
 	if preview {
 		return map[string]any{
-			"path":        relativePosix(s.root, filePath, filepath.Base(filePath)),
+			"path":        absPath(filePath, filepath.Base(filePath)),
 			"patched":     false,
 			"applied":     0,
 			"occurrences": occurrences,
@@ -1227,22 +1268,137 @@ func (s *FileService) PatchFile(input string, edits []PatchEdit, preview bool) (
 		return nil, err
 	}
 	return map[string]any{
-		"path":        relativePosix(s.root, filePath, filepath.Base(filePath)),
+		"path":        absPath(filePath, filepath.Base(filePath)),
 		"patched":     true,
 		"applied":     len(edits),
 		"occurrences": occurrences,
 	}, nil
 }
 
+// applyPatchEdit performs a single edit on str with disambiguation.
+// Returns (countReplaced, newString, error).
+func applyPatchEdit(str *string, edit PatchEdit) (int, string, error) {
+	if edit.ReplaceAll {
+		parts := strings.Split(*str, edit.OldString)
+		count := len(parts) - 1
+		*str = strings.Join(parts, edit.NewString)
+		return count, edit.NewString, nil
+	}
+
+	// Find all occurrence start positions.
+	positions := findAllOccurrences(*str, edit.OldString)
+
+	// Disambiguation path 1: occurrence_index (1-based).
+	if edit.OccurrenceIndex != nil && *edit.OccurrenceIndex > 0 {
+		idx := *edit.OccurrenceIndex
+		if idx > len(positions) {
+			return 0, "", fmt.Errorf("occurrence_index %d out of range: old_string matches %d time(s)", idx, len(positions))
+		}
+		pos := positions[idx-1]
+		*str = (*str)[:pos] + edit.NewString + (*str)[pos+len(edit.OldString):]
+		return 1, edit.NewString, nil
+	}
+
+	// Disambiguation path 2: context_before / context_after.
+	if edit.ContextBefore != "" || edit.ContextAfter != "" {
+		pos, ok := findByContext(*str, edit.OldString, edit.ContextBefore, edit.ContextAfter, positions)
+		if !ok {
+			return 0, "", fmt.Errorf("no occurrence of old_string matched the provided context (context_before=%q, context_after=%q); %d match(es) found", edit.ContextBefore, edit.ContextAfter, len(positions))
+		}
+		*str = (*str)[:pos] + edit.NewString + (*str)[pos+len(edit.OldString):]
+		return 1, edit.NewString, nil
+	}
+
+	// Default path: require uniqueness.
+	if len(positions) > 1 {
+		lines := matchLineNumbers(*str, positions)
+		return 0, "", fmt.Errorf("old_string matches %d times at lines %v; make old_string unique by including surrounding lines, or set replace_all=true, occurrence_index=N (1-based), or context_before/context_after to disambiguate", len(positions), lines)
+	}
+
+	pos := positions[0]
+	*str = (*str)[:pos] + edit.NewString + (*str)[pos+len(edit.OldString):]
+	return 1, edit.NewString, nil
+}
+
+// findAllOccurrences returns the byte offsets of every non-overlapping
+// occurrence of substr in s.
+func findAllOccurrences(s, substr string) []int {
+	if substr == "" {
+		return nil
+	}
+	var positions []int
+	start := 0
+	for {
+		idx := strings.Index(s[start:], substr)
+		if idx < 0 {
+			break
+		}
+		positions = append(positions, start+idx)
+		start += idx + len(substr)
+	}
+	return positions
+}
+
+// matchLineNumbers returns the 1-based line numbers for the given positions.
+func matchLineNumbers(s string, positions []int) []int {
+	lines := make([]int, 0, len(positions))
+	for _, pos := range positions {
+		line := 1 + strings.Count(s[:pos], "\n")
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+// findByContext returns the position of the occurrence of oldString whose
+// surrounding text matches the provided anchors. contextBefore must be a
+// suffix of the text immediately before the occurrence (trailing whitespace
+// between the anchor and the match is ignored); contextAfter must be a
+// prefix of the text immediately after (leading whitespace ignored). This
+// lets callers pass "func b() {" without having to include the exact
+// indentation/newlines between the anchor and the match.
+func findByContext(s, oldString, contextBefore, contextAfter string, positions []int) (int, bool) {
+	for _, pos := range positions {
+		if contextBefore != "" {
+			before := strings.TrimRight(s[:pos], " \t\r\n")
+			if !strings.HasSuffix(before, contextBefore) {
+				continue
+			}
+		}
+		if contextAfter != "" {
+			after := strings.TrimLeft(s[pos+len(oldString):], " \t\r\n")
+			if !strings.HasPrefix(after, contextAfter) {
+				continue
+			}
+		}
+		return pos, true
+	}
+	return 0, false
+}
+
 // PatchEdit is a single string replacement.
+//
+// Disambiguation for duplicate old_string matches (in priority order):
+//  1. ReplaceAll=true — replace every occurrence (no disambiguation needed).
+//  2. OccurrenceIndex — 1-based index of the occurrence to replace. 0 means
+//     unset; use it when you want the default uniqueness/error behavior.
+//  3. ContextBefore / ContextAfter — anchor text that must appear immediately
+//     before/after the matched occurrence. When both are set, the occurrence
+//     must be surrounded by both. Use this when the line is duplicated but
+//     its neighbors differ.
+//  4. Default — if old_string matches more than once and none of the above
+//     disambiguators are set, PatchFile returns an error listing the line
+//     numbers of every match so the caller can add surrounding context.
 type PatchEdit struct {
-	OldString  string `json:"old_string"`
-	NewString  string `json:"new_string"`
-	ReplaceAll bool   `json:"replace_all"`
+	OldString       string `json:"old_string"`
+	NewString       string `json:"new_string"`
+	ReplaceAll      bool   `json:"replace_all"`
+	OccurrenceIndex *int   `json:"occurrence_index,omitempty"`
+	ContextBefore   string `json:"context_before,omitempty"`
+	ContextAfter    string `json:"context_after,omitempty"`
 }
 
 func (s *FileService) AppendFile(input, content string) (map[string]any, error) {
-	filePath, err := resolvePath(s.root, input)
+	filePath, err := resolvePath(input)
 	if err != nil {
 		return nil, err
 	}
@@ -1254,13 +1410,13 @@ func (s *FileService) AppendFile(input, content string) (map[string]any, error) 
 		return nil, err
 	}
 	return map[string]any{
-		"path":     relativePosix(s.root, filePath, filepath.Base(filePath)),
+		"path":     absPath(filePath, filepath.Base(filePath)),
 		"appended": true,
 	}, nil
 }
 
 func (s *FileService) ExistsFile(input string) (map[string]any, error) {
-	filePath, err := resolvePath(s.root, input)
+	filePath, err := resolvePath(input)
 	if err != nil {
 		return nil, err
 	}
@@ -1274,7 +1430,7 @@ func (s *FileService) ExistsFile(input string) (map[string]any, error) {
 		}, nil
 	}
 	return map[string]any{
-		"path":   relativePosix(s.root, filePath, filepath.Base(filePath)),
+		"path":   absPath(filePath, filepath.Base(filePath)),
 		"exists": true,
 		"isFile": !stat.IsDir(),
 		"isDir":  stat.IsDir(),
@@ -1282,7 +1438,7 @@ func (s *FileService) ExistsFile(input string) (map[string]any, error) {
 }
 
 func (s *FileService) TouchFile(input string, createParents, updateOnly bool) (map[string]any, error) {
-	filePath, resolveErr := resolvePath(s.root, input)
+	filePath, resolveErr := resolvePath(input)
 	if resolveErr != nil {
 		return nil, resolveErr
 	}
@@ -1300,7 +1456,7 @@ func (s *FileService) TouchFile(input string, createParents, updateOnly bool) (m
 			return nil, err
 		}
 		return map[string]any{
-			"path":    relativePosix(s.root, filePath, filepath.Base(filePath)),
+			"path":    absPath(filePath, filepath.Base(filePath)),
 			"created": true,
 			"touched": false,
 		}, nil
@@ -1308,7 +1464,7 @@ func (s *FileService) TouchFile(input string, createParents, updateOnly bool) (m
 	now := time.Now()
 	_ = os.Chtimes(filePath, now, now)
 	return map[string]any{
-		"path":    relativePosix(s.root, filePath, filepath.Base(filePath)),
+		"path":    absPath(filePath, filepath.Base(filePath)),
 		"created": false,
 		"touched": true,
 	}, nil

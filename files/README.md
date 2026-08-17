@@ -33,15 +33,18 @@ tool. It is project guidance and remains below system and user instructions.
 
 ## Path resolution
 
-All file operations resolve paths through `resolvePath(root, input)` in
-`mcp/config.js`:
+All file operations require **absolute paths**. The server is shared
+between concurrent agents, so relative paths are rejected (they have no
+stable meaning across agents with different workspaces).
 
-- **Empty input** → the root directory (`NUSASHELL_FILES_ROOT` /
-  `NUSASHELL_WORKSPACE` / user home, or via MCP Roots in-process).
-- **`/` and absolute paths** → OS-absolute paths (the agent is a trusted actor
-  operating on behalf of the user).
-- **Relative paths** → resolved against the root; `../` traversal is allowed
-  (escape is permitted).
+- **Absolute paths** (e.g. `/home/user/project/file.go`) → accepted and
+  cleaned via `filepath.Clean`.
+- **Relative paths** → rejected with an error. The caller must pass an
+  absolute path.
+- **Empty input** → rejected (forces explicitness).
+
+Results (list, tree, grep, etc.) always return **absolute paths** so
+callers can round-trip them back as inputs without ambiguity.
 
 There is **no containment jail**. Security is the user/AI provider's
 responsibility — see

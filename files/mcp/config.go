@@ -4,32 +4,28 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
-// loadRootFromEnv resolves the root directory for file operations.
-// Precedence: NUSASHELL_FILES_ROOT → NUSASHELL_WORKSPACE → user home.
-func loadRootFromEnv() string {
-	raw := os.Getenv("NUSASHELL_FILES_ROOT")
-	if raw == "" {
-		raw = os.Getenv("NUSASHELL_WORKSPACE")
+// defaultRoot returns the default root directory for the context/retrieval
+// engines. Env-based root resolution (NUSASHELL_FILES_ROOT,
+// NUSASHELL_WORKSPACE) was removed because the MCP server is shared
+// between concurrent agents — env vars are set once at spawn time and
+// cannot reflect per-conversation workspaces. The root is only used by
+// the context/retrieval engines for indexing; all file operations
+// require absolute paths from the caller.
+func defaultRoot() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		home = "/"
 	}
-	if raw == "" {
-		home, _ := os.UserHomeDir()
-		raw = home
-	}
-	root, err := filepath.Abs(raw)
-	if err != nil {
-		root = raw
-	}
-	return root
+	return filepath.Clean(home)
 }
 
 // resolvePath resolves an ABSOLUTE filesystem path. Relative paths are
 // rejected: the Files MCP server is shared between concurrent agents and
 // a relative path has no stable meaning across them, so callers must pass
 // absolute paths (or "" which is also rejected to force explicitness).
-func resolvePath(root, input string) (string, error) {
+func resolvePath(input string) (string, error) {
 	if input == "" {
 		return "", errAbsolutePathRequired("")
 	}
@@ -41,21 +37,18 @@ func resolvePath(root, input string) (string, error) {
 
 // errAbsolutePathRequired is the error returned for relative/empty paths.
 func errAbsolutePathRequired(input string) error {
-	return fmt.Errorf("absolute path required: got %q. This MCP server is shared and does not resolve relative paths; pass an absolute path (e.g. /media/jahrulnr/storage/workspace/...).", input)
+	return fmt.Errorf("absolute path required: got %q. This MCP server is shared and does not resolve relative paths; pass an absolute path.", input)
 }
 
-// relativePosix returns a presentation path for results. Because the server
-// requires absolute inputs and is shared, results keep ABSOLUTE POSIX paths
-// (the old workspace-relative form would be ambiguous across agents). When
-// absPath sits under root we still prefer the relative form for readability;
-// otherwise we fall back to the absolute path (never ".."-laden output).
-func relativePosix(root, absPath, fallback string) string {
-	rel, err := filepath.Rel(root, absPath)
-	if err == nil && rel != "" && rel != "." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." {
-		return filepath.ToSlash(rel)
-	}
+// absPath returns the absolute path for a result, in the native OS
+// separator form (no ToSlash conversion — that would break round-trips
+// on Windows where filepath.IsAbs expects backslash-style paths). The
+// server always returns absolute paths so that callers can round-trip
+// them back as inputs without ambiguity. If absPath is empty, fallback
+// is used (typically the base name).
+func absPath(absPath, fallback string) string {
 	if absPath != "" {
-		return filepath.ToSlash(absPath)
+		return absPath
 	}
-	return filepath.ToSlash(fallback)
+	return fallback
 }

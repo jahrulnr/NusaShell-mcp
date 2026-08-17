@@ -12,7 +12,7 @@ func TestLongProcessSurvivesWaitTimeout(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("uses POSIX shell")
 	}
-	p, err := startProcess("sleep 2", "", "bash")
+	p, err := startProcess("sleep 2", "", "bash", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestLongProcessOutputCanBeReadAfterRequestTimeout(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("uses POSIX shell")
 	}
-	p, err := startProcess("printf 'ready'; sleep 1; printf ' done'", "", "bash")
+	p, err := startProcess("printf 'ready'; sleep 1; printf ' done'", "", "bash", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestLongProcessOutputCanBeReadAfterRequestTimeout(t *testing.T) {
 
 func TestProcessManagerConcurrentAccess(t *testing.T) {
 	pm := NewProcessManager()
-	p, err := startProcess("printf 'ok'", "", "bash")
+	p, err := startProcess("printf 'ok'", "", "bash", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

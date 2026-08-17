@@ -480,7 +480,7 @@ func (e *ContextEngine) readWorkspaceInstructions() (map[string]any, bool) {
 
 // detectStack classifies the workspace from manifests at root + one level.
 func (e *ContextEngine) DetectStack(subPath string) (map[string]any, error) {
-	base, err := resolvePath(e.rootSnapshot(), subPath)
+	base, err := resolvePath(subPath)
 	if err != nil {
 		return nil, err
 	}
@@ -636,7 +636,7 @@ func (e *ContextEngine) WalkWorkspace(base string, maxFiles int) ([]walkFile, wa
 				break
 			}
 			abs := filepath.Join(item.dir, entry.Name())
-			rel := relativePosix(e.rootSnapshot(), abs, entry.Name())
+			rel := absPath(abs, entry.Name())
 			if entry.IsDir() {
 				if strings.HasPrefix(entry.Name(), ".") || defaultIgnoreDirs[entry.Name()] {
 					continue
@@ -991,7 +991,7 @@ func (e *ContextEngine) ContextMap(subPath string, budget int, activeFile, query
 	useRole := role == "planner" || role == "executor" || role == "reviewer"
 	effectiveBudget := allocateRoleBudget(budget, role)
 	started := time.Now()
-	base, err := resolvePath(e.rootSnapshot(), subPath)
+	base, err := resolvePath(subPath)
 	if err != nil {
 		return nil, err
 	}
@@ -1079,7 +1079,7 @@ func min(a, b int) int {
 // ListSymbols lists definitions for one file or top-ranked files matching query.
 func (e *ContextEngine) ListSymbols(filePath, query string, limit int) (map[string]any, error) {
 	if filePath != "" {
-		abs, err := resolvePath(e.rootSnapshot(), filePath)
+		abs, err := resolvePath(filePath)
 		if err != nil {
 			return nil, err
 		}
@@ -1101,7 +1101,7 @@ func (e *ContextEngine) ListSymbols(filePath, query string, limit int) (map[stri
 		if err != nil {
 			return nil, err
 		}
-		rel := relativePosix(e.rootSnapshot(), abs, filePath)
+		rel := absPath(abs, filePath)
 		defs, _ := e.extractFromText(rel, string(raw), lang)
 		symbols := make([]map[string]any, 0, len(defs))
 		for _, d := range defs {

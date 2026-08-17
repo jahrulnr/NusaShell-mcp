@@ -8,12 +8,12 @@ import (
 )
 
 func main() {
-	root := loadRootFromEnv()
+	root := defaultRoot()
 	svc := NewFileService(root)
 	svc.ctxEngine = NewContextEngine(root)
 	svc.retrEngine = NewRetrievalEngine(root)
 
-	s := server.NewMCPServer("nusashell-files", "2.0.2",
+	s := server.NewMCPServer("nusashell-files", "2.1.0",
 		server.WithToolCapabilities(true),
 		server.WithPromptCapabilities(false),
 		server.WithResourceCapabilities(false, false),

@@ -160,7 +160,7 @@ func (m *ProcessManager) Delete(id string) {
 	m.mu.Unlock()
 }
 
-func startProcess(command, cwd, shell string) (*Process, error) {
+func startProcess(command, cwd, shell string, extraEnv []string) (*Process, error) {
 	if strings.TrimSpace(command) == "" {
 		return nil, &MissingCommandError{}
 	}
@@ -177,7 +177,7 @@ func startProcess(command, cwd, shell string) (*Process, error) {
 
 	cmd := exec.Command(resolved.Path, execArgsForShell(resolved.Kind, command)...)
 	cmd.Dir = cwd
-	cmd.Env = osEnvironForShell(resolved.Path)
+	cmd.Env = osEnvironForShell(resolved.Path, extraEnv)
 
 	p := &Process{
 		ID:        "proc_" + uuid.NewString()[:12],
@@ -242,8 +242,9 @@ func startProcess(command, cwd, shell string) (*Process, error) {
 	return p, nil
 }
 
-func osEnvironForShell(shell string) []string {
+func osEnvironForShell(shell string, extraEnv []string) []string {
 	env := append([]string{}, os.Environ()...)
 	env = append(env, "TERM=xterm-256color")
+	env = append(env, extraEnv...)
 	return env
 }

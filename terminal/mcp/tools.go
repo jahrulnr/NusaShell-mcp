@@ -19,6 +19,7 @@ func registerTools(s *server.MCPServer, mgr *SessionManager, pm *ProcessManager)
 		mcp.WithBoolean("wait", mcp.Description("Wait for the command to finish and return its output. Defaults to true. Keep true for normal commands; set false only for long-running/background processes that you intend to inspect or manage later.")),
 		mcp.WithBoolean("killOnTimeout", mcp.Description("If a wait timeout occurs, terminate the process. Default: false.")),
 		mcp.WithString("shell", mcp.Description("Shell kind or absolute executable path. Kinds: auto, bash, zsh, pwsh, powershell, cmd, wsl.")),
+		mcp.WithObject("env", mcp.Description("Additional environment variables as key-value string pairs. Merged with the parent process environment; agent values overwrite parent values. Non-string values are ignored.")),
 	), handleExec(pm))
 
 	s.AddTool(mcp.NewTool("shells",
@@ -31,6 +32,7 @@ func registerTools(s *server.MCPServer, mgr *SessionManager, pm *ProcessManager)
 		mcp.WithString("cwd", mcp.Description("Absolute working directory (default: user home).")),
 		mcp.WithNumber("cols", mcp.Description("Columns (default: 120)."), mcp.Min(1.0)),
 		mcp.WithNumber("rows", mcp.Description("Rows (default: 30)."), mcp.Min(1.0)),
+		mcp.WithObject("env", mcp.Description("Additional environment variables as key-value string pairs. Merged with the parent process environment; agent values overwrite parent values. Non-string values are ignored.")),
 	), handleOpen(mgr))
 
 	s.AddTool(mcp.NewTool("write",
@@ -101,8 +103,9 @@ func handleExec(pm *ProcessManager) server.ToolHandlerFunc {
 		if v, ok := args["killOnTimeout"].(bool); ok {
 			killOnTimeout = v
 		}
+		extraEnv := parseEnvArgs(args["env"])
 
-		p, err := startProcess(command, cwd, shell)
+		p, err := startProcess(command, cwd, shell, extraEnv)
 		if err != nil {
 			return errorResult(err.Error()), nil
 		}
@@ -158,8 +161,9 @@ func handleOpen(mgr *SessionManager) server.ToolHandlerFunc {
 		cwd, _ := args["cwd"].(string)
 		cols := toIntOr(args["cols"], 120)
 		rows := toIntOr(args["rows"], 30)
+		extraEnv := parseEnvArgs(args["env"])
 
-		session, err := OpenSession(mgr, shell, cwd, cols, rows)
+		session, err := OpenSession(mgr, shell, cwd, cols, rows, extraEnv)
 		if err != nil {
 			return errorResult(err.Error()), nil
 		}
@@ -344,6 +348,28 @@ func handleProcessList(pm *ProcessManager) server.ToolHandlerFunc {
 }
 
 // --- helpers ---
+
+// parseEnvArgs converts the `env` tool argument (a map[string]any from
+// the MCP JSON input) into a slice of "KEY=VALUE" strings suitable for
+// exec.Cmd.Env. Non-string values are silently skipped to avoid passing
+// "KEY=42" as a stringified number when the agent sent a non-string by
+// mistake. The caller (startProcess / OpenSession) merges this with the
+// parent os.Environ(), so agent values overwrite parent values.
+func parseEnvArgs(v any) []string {
+	m, ok := v.(map[string]any)
+	if !ok || len(m) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(m))
+	for k, val := range m {
+		s, ok := val.(string)
+		if !ok {
+			continue
+		}
+		out = append(out, k+"="+s)
+	}
+	return out
+}
 
 func toIntOr(v any, def int) int {
 	switch n := v.(type) {

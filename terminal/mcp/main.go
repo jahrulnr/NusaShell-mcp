@@ -11,7 +11,7 @@ func main() {
 	sessions := NewSessionManager()
 	processes := NewProcessManager()
 
-	s := server.NewMCPServer("nusashell-terminal", "2.0.2",
+	s := server.NewMCPServer("nusashell-terminal", "2.1.0",
 		server.WithToolCapabilities(true),
 		server.WithPromptCapabilities(false),
 	)

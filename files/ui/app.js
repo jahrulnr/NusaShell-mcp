@@ -17,7 +17,16 @@ const ICONS = {
 
 function $(id) { return document.getElementById(id); }
 function displayPath(path) { if (!path || path === "/") return "/"; return `/${String(path).replace(/^\/+/, "")}`; }
-function toolPath(path) { return path === "/" ? "/" : String(path).replace(/^\/+/, ""); }
+function toolPath(path) {
+  // The Files MCP server requires ABSOLUTE paths (resolvePath rejects
+  // relative paths because the server is shared between concurrent
+  // agents and a relative path has no stable meaning across them).
+  // state.currentPath and item.path are always display paths with a
+  // leading slash; preserve it so the server receives an absolute path.
+  if (!path || path === "/") return "/";
+  const stripped = String(path).replace(/^\/+/, "");
+  return "/" + stripped;
+}
 function itemPath(item) { return displayPath(item.path || joinPath(state.currentPath, item.name)); }
 function iconFor(item) { if (item.isDir) return { key: "folder", className: "folder" }; if (item.type === "image") return { key: "image", className: "image" }; if (item.type === "archive") return { key: "archive", className: "archive" }; if (item.type === "text") return { key: "code", className: "code" }; return { key: "file", className: "file" }; }
 
