@@ -594,7 +594,7 @@ func handleSearchRelevant(svc *FileService) server.ToolHandlerFunc {
 		topK := toIntOr(args["topK"], 5)
 		scope, _ := args["path"].(string)
 		refresh := toBool(args["refresh"])
-		result := engine.searchRelevant(query, topK, scope, refresh)
+		result := engine.searchRelevantContext(ctx, query, topK, scope, refresh)
 		return textJSON(result)
 	}
 }

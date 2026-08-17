@@ -9,13 +9,14 @@ import (
 
 func main() {
 	sessions := NewSessionManager()
+	processes := NewProcessManager()
 
-	s := server.NewMCPServer("nusashell-terminal", "2.0.0",
+	s := server.NewMCPServer("nusashell-terminal", "2.0.2",
 		server.WithToolCapabilities(true),
 		server.WithPromptCapabilities(false),
 	)
 
-	registerTools(s, sessions)
+	registerTools(s, sessions, processes)
 	registerPrompts(s)
 
 	if err := mcpkit.ServeStdio(s, "nusashell-terminal"); err != nil {

@@ -351,7 +351,7 @@ type symbolTagsEntry struct {
 
 // ContextEngine builds token-budgeted workspace repo maps for one root.
 type ContextEngine struct {
-	mu    sync.Mutex
+	mu    sync.RWMutex
 	root  string
 	cache map[string]symbolTagsEntry
 }
@@ -361,8 +361,28 @@ func NewContextEngine(root string) *ContextEngine {
 }
 
 func (e *ContextEngine) SetRoot(newRoot string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.root = filepath.Clean(newRoot)
 	e.cache = map[string]symbolTagsEntry{}
+}
+
+func (e *ContextEngine) rootSnapshot() string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.root
+}
+
+func (e *ContextEngine) cacheMtimes(files []walkFile) map[string]int64 {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	mtimes := make(map[string]int64, len(files))
+	for _, file := range files {
+		if entry, ok := e.cache[file.rel]; ok && entry.mtimeMs > 0 {
+			mtimes[file.rel] = entry.mtimeMs
+		}
+	}
+	return mtimes
 }
 
 func toPosixPath(p string) string {
@@ -436,7 +456,7 @@ func roleMatchMultiplier(rel, role string) float64 {
 
 // readWorkspaceInstructions returns the workspace-root AGENTS.md as context.
 func (e *ContextEngine) readWorkspaceInstructions() (map[string]any, bool) {
-	filePath := filepath.Join(e.root, "AGENTS.md")
+	filePath := filepath.Join(e.rootSnapshot(), "AGENTS.md")
 	stat, err := os.Stat(filePath)
 	if err != nil || !stat.Mode().IsRegular() {
 		return nil, false
@@ -460,7 +480,7 @@ func (e *ContextEngine) readWorkspaceInstructions() (map[string]any, bool) {
 
 // detectStack classifies the workspace from manifests at root + one level.
 func (e *ContextEngine) DetectStack(subPath string) (map[string]any, error) {
-	base, err := resolvePath(e.root, subPath)
+	base, err := resolvePath(e.rootSnapshot(), subPath)
 	if err != nil {
 		return nil, err
 	}
@@ -616,7 +636,7 @@ func (e *ContextEngine) WalkWorkspace(base string, maxFiles int) ([]walkFile, wa
 				break
 			}
 			abs := filepath.Join(item.dir, entry.Name())
-			rel := relativePosix(e.root, abs, entry.Name())
+			rel := relativePosix(e.rootSnapshot(), abs, entry.Name())
 			if entry.IsDir() {
 				if strings.HasPrefix(entry.Name(), ".") || defaultIgnoreDirs[entry.Name()] {
 					continue
@@ -971,7 +991,7 @@ func (e *ContextEngine) ContextMap(subPath string, budget int, activeFile, query
 	useRole := role == "planner" || role == "executor" || role == "reviewer"
 	effectiveBudget := allocateRoleBudget(budget, role)
 	started := time.Now()
-	base, err := resolvePath(e.root, subPath)
+	base, err := resolvePath(e.rootSnapshot(), subPath)
 	if err != nil {
 		return nil, err
 	}
@@ -993,13 +1013,7 @@ func (e *ContextEngine) ContextMap(subPath string, budget int, activeFile, query
 
 	var mtimes map[string]int64
 	if useRole {
-		mtimes = map[string]int64{}
-		for _, file := range files {
-			entry, ok := e.cache[file.rel]
-			if ok && entry.mtimeMs > 0 {
-				mtimes[file.rel] = entry.mtimeMs
-			}
-		}
+		mtimes = e.cacheMtimes(files)
 	}
 
 	t = time.Now()
@@ -1065,7 +1079,7 @@ func min(a, b int) int {
 // ListSymbols lists definitions for one file or top-ranked files matching query.
 func (e *ContextEngine) ListSymbols(filePath, query string, limit int) (map[string]any, error) {
 	if filePath != "" {
-		abs, err := resolvePath(e.root, filePath)
+		abs, err := resolvePath(e.rootSnapshot(), filePath)
 		if err != nil {
 			return nil, err
 		}
@@ -1087,7 +1101,7 @@ func (e *ContextEngine) ListSymbols(filePath, query string, limit int) (map[stri
 		if err != nil {
 			return nil, err
 		}
-		rel := relativePosix(e.root, abs, filePath)
+		rel := relativePosix(e.rootSnapshot(), abs, filePath)
 		defs, _ := e.extractFromText(rel, string(raw), lang)
 		symbols := make([]map[string]any, 0, len(defs))
 		for _, d := range defs {
@@ -1098,7 +1112,7 @@ func (e *ContextEngine) ListSymbols(filePath, query string, limit int) (map[stri
 	if query == "" {
 		return nil, fmt.Errorf("list_symbols requires either a file path or a query")
 	}
-	files, _ := e.WalkWorkspace(e.root, 0)
+	files, _ := e.WalkWorkspace(e.rootSnapshot(), 0)
 	defsByFile, refsByFile, _, _ := e.ExtractAll(files, false)
 	ro := e.rankFiles(defsByFile, refsByFile, "", query, "", nil, 0)
 	lowered := strings.ToLower(query)

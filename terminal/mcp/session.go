@@ -93,6 +93,7 @@ type Session struct {
 	ptyFile *os.File
 	cmd     *exec.Cmd
 	doneCh  chan struct{}
+	closed  bool
 }
 
 func (s *Session) appendData(data string) {
@@ -191,12 +192,12 @@ func OpenSession(mgr *SessionManager, shell string, cwd string, cols, rows int) 
 		rows = 30
 	}
 
-	cmd := exec.Command(resolved.Path)
+	cmd := exec.Command(resolved.Path, shellSpawnArgs(resolved.Path)...)
 	cmd.Dir = cwd
-	cmd.Env = append(os.Environ(),
+	cmd.Env = shellSpawnEnv(resolved.Path, append(os.Environ(),
 		"TERM=xterm-256color",
 		"COLORTERM=truecolor",
-	)
+	))
 
 	ptyFile, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
 	if err != nil {
@@ -233,16 +234,15 @@ func OpenSession(mgr *SessionManager, shell string, cwd string, cols, rows int) 
 		exitCode := 0
 		if err := cmd.Wait(); err != nil {
 			if exitErr, ok := err.(*exec.ExitError); ok {
-				code := exitErr.ExitCode()
-				s.ExitCode = &code
-				exitCode = code
+				exitCode = exitErr.ExitCode()
+			} else {
+				exitCode = -1
 			}
-		} else {
-			zero := 0
-			s.ExitCode = &zero
 		}
-		_ = exitCode
+		s.mu.Lock()
+		s.ExitCode = &exitCode
 		s.Exited = true
+		s.mu.Unlock()
 		close(s.doneCh)
 	}()
 
@@ -250,9 +250,26 @@ func OpenSession(mgr *SessionManager, shell string, cwd string, cols, rows int) 
 	return s, nil
 }
 
+// state returns a consistent snapshot of mutable session state.
+func (s *Session) state() (exited bool, exitCode *int, cols, rows int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	exited = s.Exited
+	if s.ExitCode != nil {
+		v := *s.ExitCode
+		exitCode = &v
+	}
+	return exited, exitCode, s.Cols, s.Rows
+}
+
 // WriteInput sends data to the session's PTY.
 func (s *Session) WriteInput(data string) error {
-	if s.Exited {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Exited || s.closed {
+		return &SessionExitedError{ID: s.ID}
+	}
+	if s.ptyFile == nil {
 		return &SessionExitedError{ID: s.ID}
 	}
 	_, err := s.ptyFile.Write([]byte(data))
@@ -267,20 +284,37 @@ func (s *Session) Resize(cols, rows int) error {
 	if rows < 1 {
 		rows = 1
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.Cols = cols
 	s.Rows = rows
-	if s.Exited {
+	if s.Exited || s.closed || s.ptyFile == nil {
 		return nil
 	}
 	return pty.Setsize(s.ptyFile, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
 }
 
 // Close kills the underlying process and releases the PTY.
+// It does not wait for the process here; the lifecycle goroutine owns cmd.Wait.
 func (s *Session) Close() {
-	if !s.Exited && s.cmd.Process != nil {
-		_ = s.cmd.Process.Kill()
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
 	}
-	_ = s.ptyFile.Close()
+	s.closed = true
+	proc := s.cmd.Process
+	ptyFile := s.ptyFile
+	exited := s.Exited
+	s.mu.Unlock()
+
+	if !exited && proc != nil {
+		_ = proc.Kill()
+	}
+	if ptyFile != nil {
+		_ = ptyFile.Close()
+	}
 }
 
 // ShellUnavailableError is returned when a requested shell is missing.

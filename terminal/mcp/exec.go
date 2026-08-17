@@ -69,7 +69,9 @@ func runExec(ctx context.Context, command, cwd, shell string, timeoutMs int) (*E
 	if !resolved.Available {
 		return nil, &ShellUnavailableError{Shell: shell}
 	}
-	cmd := exec.CommandContext(ctx, resolved.Path, execArgsForShell(resolved.Kind, command)...)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Duration(timeoutMs)*time.Millisecond)
+	defer cancel()
+	cmd := exec.CommandContext(ctxWithTimeout, resolved.Path, execArgsForShell(resolved.Kind, command)...)
 	cmd.Dir = cwd
 	var stdout, stderrB bytes.Buffer
 	cmd.Stdout = &stdout
@@ -96,11 +98,11 @@ func runExec(ctx context.Context, command, cwd, shell string, timeoutMs int) (*E
 	case waitErr = <-done:
 	case <-timeoutCh:
 		timedOut = true
-		_ = cmd.Process.Kill()
+		_ = killProcessTree(cmd.Process)
 		<-done
 	case <-ctx.Done():
 		cancelled = true
-		_ = cmd.Process.Kill()
+		_ = killProcessTree(cmd.Process)
 		<-done
 	}
 	exitCode := 0

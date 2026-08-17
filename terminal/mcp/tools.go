@@ -10,14 +10,16 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
-func registerTools(s *server.MCPServer, mgr *SessionManager) {
+func registerTools(s *server.MCPServer, mgr *SessionManager, pm *ProcessManager) {
 	s.AddTool(mcp.NewTool("exec",
 		mcp.WithDescription("Run a one-shot shell command and return stdout/stderr plus structured fields. cwd defaults to the user's home directory; pass an absolute cwd for a specific folder."),
 		mcp.WithString("command", mcp.Required(), mcp.Description("Shell command to execute.")),
 		mcp.WithString("cwd", mcp.Description("Absolute working directory (default: user home).")),
-		mcp.WithNumber("timeoutMs", mcp.Description("Optional timeout in milliseconds before the command is killed.")),
+		mcp.WithNumber("timeoutMs", mcp.Description("Optional maximum time this MCP call waits. It does not kill the process unless killOnTimeout=true.")),
+		mcp.WithBoolean("wait", mcp.Description("Wait for completion before returning (default: true).")),
+		mcp.WithBoolean("killOnTimeout", mcp.Description("If a wait timeout occurs, terminate the process. Default: false.")),
 		mcp.WithString("shell", mcp.Description("Shell kind or absolute executable path. Kinds: auto, bash, zsh, pwsh, powershell, cmd, wsl.")),
-	), handleExec(mgr))
+	), handleExec(pm))
 
 	s.AddTool(mcp.NewTool("shells",
 		mcp.WithDescription("List shells available on this host (bash, zsh, pwsh, powershell, cmd, wsl) with resolved paths and the auto default."),
@@ -59,36 +61,79 @@ func registerTools(s *server.MCPServer, mgr *SessionManager) {
 	s.AddTool(mcp.NewTool("list",
 		mcp.WithDescription("List active terminal sessions."),
 	), handleList(mgr))
+	s.AddTool(mcp.NewTool("process_read",
+		mcp.WithDescription("Read buffered stdout/stderr from a long-running exec process without stopping it."),
+		mcp.WithString("processId", mcp.Required()),
+		mcp.WithBoolean("clear", mcp.Description("Clear buffered output after reading (default: true).")),
+	), handleProcessRead(pm))
+
+	s.AddTool(mcp.NewTool("process_wait",
+		mcp.WithDescription("Wait for a long-running exec process. timeoutMs limits how long this MCP call waits; it does not kill the process."),
+		mcp.WithString("processId", mcp.Required()),
+		mcp.WithNumber("timeoutMs", mcp.Description("Optional maximum time to wait for this call.")),
+	), handleProcessWait(pm))
+
+	s.AddTool(mcp.NewTool("process_kill",
+		mcp.WithDescription("Terminate a long-running exec process and its process group where supported."),
+		mcp.WithString("processId", mcp.Required()),
+	), handleProcessKill(pm))
+
+	s.AddTool(mcp.NewTool("process_list",
+		mcp.WithDescription("List long-running exec processes owned by this MCP server."),
+	), handleProcessList(pm))
+
 }
 
 // --- Handlers ---
 
-func handleExec(mgr *SessionManager) server.ToolHandlerFunc {
+func handleExec(pm *ProcessManager) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 		command, _ := args["command"].(string)
 		cwd, _ := args["cwd"].(string)
 		shell, _ := args["shell"].(string)
-		timeoutMs, _ := args["timeoutMs"].(float64)
-
-		if timeoutMs < 0 {
-			timeoutMs = 0
+		wait := true
+		if v, ok := args["wait"].(bool); ok {
+			wait = v
 		}
-		// Apply a context deadline so a runaway command (no explicit timeoutMs)
-		// cannot hold the request forever.
-		eff := int64(timeoutMs)
-		if eff <= 0 {
-			eff = defaultExecTimeoutMs
+		timeoutMs := toIntOr(args["timeoutMs"], 0)
+		killOnTimeout := false
+		if v, ok := args["killOnTimeout"].(bool); ok {
+			killOnTimeout = v
 		}
-		ctx, cancel := context.WithTimeout(ctx, time.Duration(eff)*time.Millisecond)
-		defer cancel()
 
-		result, err := RunExecWithContext(ctx, command, cwd, shell, int(eff))
+		p, err := startProcess(command, cwd, shell)
 		if err != nil {
 			return errorResult(err.Error()), nil
 		}
-		return textJSON(result, formatExecReceipt(result))
+		pm.Add(p)
+
+		if !wait {
+			return processJSON(p, false, false, false)
+		}
+
+		waited := p.wait(ctx, time.Duration(timeoutMs)*time.Millisecond)
+		if !waited {
+			if killOnTimeout {
+				_ = p.kill()
+			}
+			return processJSON(p, true, timeoutMs > 0, killOnTimeout)
+		}
+		return processJSON(p, false, false, false)
 	}
+}
+
+func processJSON(p *Process, waitTimedOut, timedOut, killed bool) (*mcp.CallToolResult, error) {
+	stdout, stderr, truncated, exited, exitCode, signal := p.snapshot(false)
+	data := map[string]any{
+		"processId": p.ID, "command": p.Command, "cwd": p.Cwd,
+		"shell": p.Shell, "shellKind": p.ShellKind,
+		"startedAt": p.StartedAt, "exited": exited, "exitCode": exitCode,
+		"signal": signal, "stdout": stripANSI(stdout), "stderr": stripANSI(stderr),
+		"truncated": truncated, "waitTimedOut": waitTimedOut,
+		"timeoutIsNotProcessLifetime": true, "killed": killed,
+	}
+	return textJSON(data, fmt.Sprintf("process_id=%s\nexited=%t\nexit_code=%v\nwait_timed_out=%t\n", p.ID, exited, exitCode, waitTimedOut))
 }
 
 func handleShells(mgr *SessionManager) server.ToolHandlerFunc {
@@ -163,17 +208,18 @@ func handleRead(mgr *SessionManager) server.ToolHandlerFunc {
 			stdoutText = stripANSI(stdout)
 		}
 
+		exited, exitCode, _, _ := session.state()
 		data := map[string]any{
 			"stdout":       stdoutText,
 			"stderr":       "",
-			"exited":       session.Exited,
-			"exitCode":     session.ExitCode,
+			"exited":       exited,
+			"exitCode":     exitCode,
 			"truncated":    truncated,
 			"sessionId":    session.ID,
 			"ansiStripped": ansiStripped,
 		}
 		return textJSON(data, formatPtyReadText(map[string]any{
-			"sessionId": session.ID, "exited": session.Exited, "exitCode": session.ExitCode,
+			"sessionId": session.ID, "exited": exited, "exitCode": exitCode,
 			"truncated": truncated, "stdout": stdout, "ansiStripped": ansiStripped,
 		}))
 	}
@@ -193,12 +239,11 @@ func handleResize(mgr *SessionManager) server.ToolHandlerFunc {
 		if err := session.Resize(cols, rows); err != nil {
 			return errorResult(err.Error()), nil
 		}
+		_, _, currentCols, currentRows := session.state()
 		return textJSON(map[string]any{
-			"ok":        true,
-			"sessionId": session.ID,
-			"cols":      session.Cols,
-			"rows":      session.Rows,
-		}, fmt.Sprintf("ok=true\nsession_id=%s\ncols=%d\nrows=%d\n", session.ID, session.Cols, session.Rows))
+			"ok": true, "sessionId": session.ID,
+			"cols": currentCols, "rows": currentRows,
+		}, fmt.Sprintf("ok=true\nsession_id=%s\ncols=%d\nrows=%d\n", session.ID, currentCols, currentRows))
 	}
 }
 
@@ -220,19 +265,73 @@ func handleList(mgr *SessionManager) server.ToolHandlerFunc {
 		sessions := mgr.List()
 		items := make([]map[string]any, 0, len(sessions))
 		for _, s := range sessions {
+			exited, exitCode, cols, rows := s.state()
 			items = append(items, map[string]any{
-				"sessionId": s.ID,
-				"shell":     s.Shell,
-				"shellKind": s.ShellKind,
-				"cwd":       s.Cwd,
-				"cols":      s.Cols,
-				"rows":      s.Rows,
-				"createdAt": s.CreatedAt,
-				"exited":    s.Exited,
-				"exitCode":  s.ExitCode,
+				"sessionId": s.ID, "shell": s.Shell, "shellKind": s.ShellKind,
+				"cwd": s.Cwd, "cols": cols, "rows": rows, "createdAt": s.CreatedAt,
+				"exited": exited, "exitCode": exitCode,
 			})
 		}
 		return textJSON(map[string]any{"sessions": items, "count": len(items)}, formatListSessionsText(items))
+	}
+}
+
+func handleProcessRead(pm *ProcessManager) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, _ := req.GetArguments()["processId"].(string)
+		clear := true
+		if v, ok := req.GetArguments()["clear"].(bool); ok {
+			clear = v
+		}
+		p, err := pm.Get(id)
+		if err != nil {
+			return errorResult(err.Error()), nil
+		}
+		stdout, stderr, truncated, exited, exitCode, signal := p.snapshot(clear)
+		data := map[string]any{"processId": id, "stdout": stripANSI(stdout), "stderr": stripANSI(stderr),
+			"exited": exited, "exitCode": exitCode, "signal": signal, "truncated": truncated}
+		return textJSON(data, fmt.Sprintf("process_id=%s\nexited=%t\nexit_code=%v\nstdout:\n%s\nstderr:\n%s\n", id, exited, exitCode, stripANSI(stdout), stripANSI(stderr)))
+	}
+}
+
+func handleProcessWait(pm *ProcessManager) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, _ := req.GetArguments()["processId"].(string)
+		timeoutMs := toIntOr(req.GetArguments()["timeoutMs"], 0)
+		p, err := pm.Get(id)
+		if err != nil {
+			return errorResult(err.Error()), nil
+		}
+		done := p.wait(ctx, time.Duration(timeoutMs)*time.Millisecond)
+		return processJSON(p, !done, timeoutMs > 0 && !done, false)
+	}
+}
+
+func handleProcessKill(pm *ProcessManager) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, _ := req.GetArguments()["processId"].(string)
+		p, err := pm.Get(id)
+		if err != nil {
+			return errorResult(err.Error()), nil
+		}
+		if err := p.kill(); err != nil {
+			return errorResult(err.Error()), nil
+		}
+		return processJSON(p, false, false, true)
+	}
+}
+
+func handleProcessList(pm *ProcessManager) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		items := pm.List()
+		out := make([]map[string]any, 0, len(items))
+		for _, p := range items {
+			_, _, _, exited, code, signal := p.snapshot(false)
+			out = append(out, map[string]any{"processId": p.ID, "command": p.Command, "cwd": p.Cwd,
+				"shell": p.Shell, "shellKind": p.ShellKind, "startedAt": p.StartedAt,
+				"exited": exited, "exitCode": code, "signal": signal})
+		}
+		return textJSON(map[string]any{"processes": out, "count": len(out)}, "")
 	}
 }
 

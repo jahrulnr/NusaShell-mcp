@@ -1,7 +1,7 @@
 {
   "id": "nusashell.terminal",
   "name": "Terminal",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "icon": "\ud83d\udcbb",
   "ui": {
     "entry": "ui/index.html",

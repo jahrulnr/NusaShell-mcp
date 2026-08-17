@@ -13,7 +13,7 @@ func main() {
 	svc.ctxEngine = NewContextEngine(root)
 	svc.retrEngine = NewRetrievalEngine(root)
 
-	s := server.NewMCPServer("nusashell-files", "2.0.0",
+	s := server.NewMCPServer("nusashell-files", "2.0.2",
 		server.WithToolCapabilities(true),
 		server.WithPromptCapabilities(false),
 		server.WithResourceCapabilities(false, false),

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os"
@@ -498,7 +499,7 @@ func runRetrieval(chunks []retrievalChunk, query string, topK, candidatePool int
 
 // RetrievalEngine indexes a workspace directory into mtime-cached chunks.
 type RetrievalEngine struct {
-	mu    sync.Mutex
+	mu    sync.RWMutex
 	root  string
 	cache map[string]retrievalCacheEntry
 }
@@ -514,25 +515,40 @@ func NewRetrievalEngine(root string) *RetrievalEngine {
 }
 
 func (e *RetrievalEngine) SetRoot(root string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.root = filepath.Clean(root)
 	e.cache = map[string]retrievalCacheEntry{}
 }
 
 func (e *RetrievalEngine) searchRelevant(query string, topK int, scope string, refresh bool) map[string]any {
+	return e.searchRelevantContext(context.Background(), query, topK, scope, refresh)
+}
+
+func (e *RetrievalEngine) searchRelevantContext(ctx context.Context, query string, topK int, scope string, refresh bool) map[string]any {
 	t0 := time.Now()
 	q := strings.TrimSpace(query)
 	if q == "" {
 		return map[string]any{"error": "searchRelevant requires a non-empty query"}
 	}
-	searchRoot := e.root
+	if err := ctx.Err(); err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+	e.mu.RLock()
+	root := e.root
+	e.mu.RUnlock()
+	searchRoot := root
 	if scope != "" {
-		resolved, err := resolvePath(e.root, scope)
+		resolved, err := resolvePath(root, scope)
 		if err != nil {
 			return map[string]any{"error": err.Error()}
 		}
 		searchRoot = resolved
 	}
-	chunks, filesScanned, cacheHits, cacheMisses := e.loadChunks(searchRoot, refresh)
+	chunks, filesScanned, cacheHits, cacheMisses := e.loadChunksContext(ctx, searchRoot, refresh)
+	if err := ctx.Err(); err != nil {
+		return map[string]any{"error": err.Error()}
+	}
 
 	k := topK
 	if k < 1 {
@@ -571,24 +587,41 @@ func (e *RetrievalEngine) searchRelevant(query string, topK int, scope string, r
 }
 
 func (e *RetrievalEngine) loadChunks(dir string, refresh bool) ([]retrievalChunk, int, int, int) {
-	if refresh {
-		e.cache = map[string]retrievalCacheEntry{}
-	}
+	return e.loadChunksContext(context.Background(), dir, refresh)
+}
+
+// loadChunksContext is concurrency-safe and cooperatively cancellable. Refresh
+// bypasses the cache for this scan instead of clearing shared state; clearing a
+// shared cache while another request is reading it was the source of a Go map
+// race in the original port.
+func (e *RetrievalEngine) loadChunksContext(ctx context.Context, dir string, refresh bool) ([]retrievalChunk, int, int, int) {
 	var chunks []retrievalChunk
 	filesScanned, cacheHits, cacheMisses := 0, 0, 0
 
-	var walk func(string)
-	walk = func(current string) {
+	e.mu.RLock()
+	root := e.root
+	e.mu.RUnlock()
+
+	var walk func(string) error
+	walk = func(current string) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		entries, err := os.ReadDir(current)
 		if err != nil {
-			return
+			return nil
 		}
 		for _, entry := range entries {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if entry.IsDir() {
 				if strings.HasPrefix(entry.Name(), ".") || retrievalSkipDirs[entry.Name()] {
 					continue
 				}
-				walk(filepath.Join(current, entry.Name()))
+				if err := walk(filepath.Join(current, entry.Name())); err != nil {
+					return err
+				}
 				continue
 			}
 			if !entry.Type().IsRegular() {
@@ -602,7 +635,7 @@ func (e *RetrievalEngine) loadChunks(dir string, refresh bool) ([]retrievalChunk
 				continue
 			}
 			full := filepath.Join(current, entry.Name())
-			rel := relativePosix(e.root, full, entry.Name())
+			rel := relativePosix(root, full, entry.Name())
 			filesScanned++
 			stat, err := os.Stat(full)
 			if err != nil {
@@ -611,16 +644,24 @@ func (e *RetrievalEngine) loadChunks(dir string, refresh bool) ([]retrievalChunk
 			if stat.Size() > retrievalMaxFileBytes {
 				continue
 			}
+			e.mu.RLock()
 			cached, ok := e.cache[rel]
+			e.mu.RUnlock()
 			if !refresh && ok && cached.mtimeMs == stat.ModTime().UnixMilli() && cached.size == stat.Size() {
 				cacheHits++
 				chunks = append(chunks, cached.chunks...)
 				continue
 			}
 			cacheMisses++
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			raw, err := os.ReadFile(full)
 			if err != nil {
 				continue
+			}
+			if err := ctx.Err(); err != nil {
+				return err
 			}
 			fileChunks := chunkText(splitLines(string(raw)))
 			for i := range fileChunks {
@@ -628,10 +669,13 @@ func (e *RetrievalEngine) loadChunks(dir string, refresh bool) ([]retrievalChunk
 				fileChunks[i].file = rel
 				fileChunks[i].tokens = tokenize(fileChunks[i].text)
 			}
+			e.mu.Lock()
 			e.cache[rel] = retrievalCacheEntry{mtimeMs: stat.ModTime().UnixMilli(), size: stat.Size(), chunks: fileChunks}
+			e.mu.Unlock()
 			chunks = append(chunks, fileChunks...)
 		}
+		return nil
 	}
-	walk(dir)
+	_ = walk(dir)
 	return chunks, filesScanned, cacheHits, cacheMisses
 }
