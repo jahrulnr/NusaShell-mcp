@@ -15,15 +15,15 @@ func registerTools(s *server.MCPServer, mgr *SessionManager, pm *ProcessManager)
 		mcp.WithDescription("Run a one-shot shell command and return stdout/stderr plus structured fields. cwd defaults to the user's home directory; pass an absolute cwd for a specific folder."),
 		mcp.WithString("command", mcp.Required(), mcp.Description("Shell command to execute.")),
 		mcp.WithString("cwd", mcp.Description("Absolute working directory (default: user home).")),
-		mcp.WithNumber("timeoutMs", mcp.Description("Optional maximum time this MCP call waits. It does not kill the process unless killOnTimeout=true.")),
-		mcp.WithBoolean("wait", mcp.Description("Wait for completion before returning (default: true).")),
+		mcp.WithNumber("timeoutMs", mcp.Description("Optional maximum time this MCP call waits. It does not limit process lifetime. If wait=false, the process is returned immediately and this value is ignored.")),
+		mcp.WithBoolean("wait", mcp.Description("Wait for the command to finish and return its output. Defaults to true. Keep true for normal commands; set false only for long-running/background processes that you intend to inspect or manage later.")),
 		mcp.WithBoolean("killOnTimeout", mcp.Description("If a wait timeout occurs, terminate the process. Default: false.")),
 		mcp.WithString("shell", mcp.Description("Shell kind or absolute executable path. Kinds: auto, bash, zsh, pwsh, powershell, cmd, wsl.")),
 	), handleExec(pm))
 
 	s.AddTool(mcp.NewTool("shells",
 		mcp.WithDescription("List shells available on this host (bash, zsh, pwsh, powershell, cmd, wsl) with resolved paths and the auto default."),
-	), handleShells(mgr))
+	), handleShells())
 
 	s.AddTool(mcp.NewTool("open",
 		mcp.WithDescription("Open a new interactive terminal session (PTY). cwd defaults to the user's home directory."),
@@ -109,7 +109,7 @@ func handleExec(pm *ProcessManager) server.ToolHandlerFunc {
 		pm.Add(p)
 
 		if !wait {
-			return processJSON(p, false, false, false)
+			return processJSON(p, false, false)
 		}
 
 		waited := p.wait(ctx, time.Duration(timeoutMs)*time.Millisecond)
@@ -117,13 +117,13 @@ func handleExec(pm *ProcessManager) server.ToolHandlerFunc {
 			if killOnTimeout {
 				_ = p.kill()
 			}
-			return processJSON(p, true, timeoutMs > 0, killOnTimeout)
+			return processJSON(p, true, killOnTimeout)
 		}
-		return processJSON(p, false, false, false)
+		return processJSON(p, false, false)
 	}
 }
 
-func processJSON(p *Process, waitTimedOut, timedOut, killed bool) (*mcp.CallToolResult, error) {
+func processJSON(p *Process, waitTimedOut, killed bool) (*mcp.CallToolResult, error) {
 	stdout, stderr, truncated, exited, exitCode, signal := p.snapshot(false)
 	data := map[string]any{
 		"processId": p.ID, "command": p.Command, "cwd": p.Cwd,
@@ -136,8 +136,8 @@ func processJSON(p *Process, waitTimedOut, timedOut, killed bool) (*mcp.CallTool
 	return textJSON(data, fmt.Sprintf("process_id=%s\nexited=%t\nexit_code=%v\nwait_timed_out=%t\n", p.ID, exited, exitCode, waitTimedOut))
 }
 
-func handleShells(mgr *SessionManager) server.ToolHandlerFunc {
-	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func handleShells() server.ToolHandlerFunc {
+	return func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		data := ListAvailableShells()
 		return textJSON(data, formatShellsText(data))
 	}
@@ -303,7 +303,7 @@ func handleProcessWait(pm *ProcessManager) server.ToolHandlerFunc {
 			return errorResult(err.Error()), nil
 		}
 		done := p.wait(ctx, time.Duration(timeoutMs)*time.Millisecond)
-		return processJSON(p, !done, timeoutMs > 0 && !done, false)
+		return processJSON(p, !done, timeoutMs > 0 && !done)
 	}
 }
 
@@ -317,7 +317,7 @@ func handleProcessKill(pm *ProcessManager) server.ToolHandlerFunc {
 		if err := p.kill(); err != nil {
 			return errorResult(err.Error()), nil
 		}
-		return processJSON(p, false, false, true)
+		return processJSON(p, false, false)
 	}
 }
 

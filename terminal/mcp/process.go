@@ -13,6 +13,11 @@ import (
 	"github.com/google/uuid"
 )
 
+// MissingCommandError is returned when an exec command is empty.
+type MissingCommandError struct{}
+
+func (e *MissingCommandError) Error() string { return "command is required" }
+
 // Process is a long-lived non-PTY command owned by the MCP server.
 // Its lifetime is independent from any individual MCP request.
 type Process struct {

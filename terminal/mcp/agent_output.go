@@ -2,8 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"strconv"
 	"strings"
 )
 
@@ -32,49 +30,18 @@ func headerLines(fields map[string]any) string {
 	return strings.Join(lines, "\n")
 }
 
-func formatExecReceipt(result *ExecResult) string {
-	fields := map[string]any{
-		"exit_code": derefInt(result.ExitCode),
-		"shell":     string(result.ShellKind),
-		"timed_out": result.TimedOut,
-		"truncated": result.Truncated,
-	}
-	if result.Signal != "" {
-		fields["signal"] = result.Signal
-	}
-	if home, err := os.UserHomeDir(); err == nil && result.Cwd != home {
-		fields["cwd"] = result.Cwd
-	}
-	return strings.Join([]string{
-		headerLines(fields),
-		"",
-		"=== stdout ===",
-		strings.TrimRight(result.Stdout, " \t\r\n"),
-		"=== stderr ===",
-		strings.TrimRight(result.Stderr, " \t\r\n"),
-		"",
-	}, "\n")
-}
-
-func derefInt(p *int) any {
-	if p == nil {
-		return ""
-	}
-	return *p
-}
-
 func formatShellsText(data map[string]any) string {
+	shells, _ := data["shells"].([]ResolvedShell)
 	var lines []string
 	lines = append(lines, headerLines(map[string]any{
 		"ok":       true,
 		"platform": data["platform"],
 		"default":  data["defaultKind"],
-		"count":    len(data["shells"].([]any)),
+		"count":    len(shells),
 	}))
 	lines = append(lines, "", "kind\tpath\tsource")
-	for _, sh := range data["shells"].([]any) {
-		m := sh.(map[string]any)
-		lines = append(lines, fmt.Sprintf("%v\t%v\t%v", m["kind"], m["path"], m["source"]))
+	for _, sh := range shells {
+		lines = append(lines, fmt.Sprintf("%s\t%s\t%s", sh.Kind, sh.Path, sh.Source))
 	}
 	lines = append(lines, "")
 	return strings.Join(lines, "\n")
@@ -127,11 +94,4 @@ func formatListSessionsText(items []map[string]any) string {
 	}
 	lines = append(lines, "")
 	return strings.Join(lines, "\n")
-}
-
-func itoa(v any) string {
-	if v == nil {
-		return ""
-	}
-	return strconv.Itoa(int(toIntOr(v, 0)))
 }
