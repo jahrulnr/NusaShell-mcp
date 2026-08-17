@@ -76,3 +76,21 @@ func TestProcessManagerConcurrentAccess(t *testing.T) {
 	_ = p.wait(context.Background(), time.Second)
 	<-done
 }
+
+func TestFormatProcessTextIncludesOutputForForegroundWait(t *testing.T) {
+	text := formatProcessText("proc-1", true, intPtr(0), false, "hello", "oops", true)
+	if !strings.Contains(text, "stdout:\nhello") || !strings.Contains(text, "stderr:\noops") {
+		t.Fatalf("foreground result omitted command output: %q", text)
+	}
+}
+
+func TestFormatProcessTextOmitsOutputForBackgroundLaunch(t *testing.T) {
+	text := formatProcessText("proc-1", false, nil, false, "background", "", false)
+	if strings.Contains(text, "background") {
+		t.Fatalf("background receipt unexpectedly included process output: %q", text)
+	}
+}
+
+func intPtr(v int) *int {
+	return &v
+}

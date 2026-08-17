@@ -109,7 +109,7 @@ func handleExec(pm *ProcessManager) server.ToolHandlerFunc {
 		pm.Add(p)
 
 		if !wait {
-			return processJSON(p, false, false)
+			return processJSON(p, false, false, false)
 		}
 
 		waited := p.wait(ctx, time.Duration(timeoutMs)*time.Millisecond)
@@ -117,13 +117,13 @@ func handleExec(pm *ProcessManager) server.ToolHandlerFunc {
 			if killOnTimeout {
 				_ = p.kill()
 			}
-			return processJSON(p, true, killOnTimeout)
+			return processJSON(p, true, killOnTimeout, true)
 		}
-		return processJSON(p, false, false)
+		return processJSON(p, false, false, true)
 	}
 }
 
-func processJSON(p *Process, waitTimedOut, killed bool) (*mcp.CallToolResult, error) {
+func processJSON(p *Process, waitTimedOut, killed, includeOutput bool) (*mcp.CallToolResult, error) {
 	stdout, stderr, truncated, exited, exitCode, signal := p.snapshot(false)
 	data := map[string]any{
 		"processId": p.ID, "command": p.Command, "cwd": p.Cwd,
@@ -133,7 +133,15 @@ func processJSON(p *Process, waitTimedOut, killed bool) (*mcp.CallToolResult, er
 		"truncated": truncated, "waitTimedOut": waitTimedOut,
 		"timeoutIsNotProcessLifetime": true, "killed": killed,
 	}
-	return textJSON(data, fmt.Sprintf("process_id=%s\nexited=%t\nexit_code=%v\nwait_timed_out=%t\n", p.ID, exited, exitCode, waitTimedOut))
+	return textJSON(data, formatProcessText(p.ID, exited, exitCode, waitTimedOut, stdout, stderr, includeOutput))
+}
+
+func formatProcessText(id string, exited bool, exitCode *int, waitTimedOut bool, stdout, stderr string, includeOutput bool) string {
+	text := fmt.Sprintf("process_id=%s\nexited=%t\nexit_code=%v\nwait_timed_out=%t\n", id, exited, exitCode, waitTimedOut)
+	if includeOutput {
+		text += fmt.Sprintf("stdout:\n%s\nstderr:\n%s\n", stripANSI(stdout), stripANSI(stderr))
+	}
+	return text
 }
 
 func handleShells() server.ToolHandlerFunc {
@@ -303,7 +311,7 @@ func handleProcessWait(pm *ProcessManager) server.ToolHandlerFunc {
 			return errorResult(err.Error()), nil
 		}
 		done := p.wait(ctx, time.Duration(timeoutMs)*time.Millisecond)
-		return processJSON(p, !done, timeoutMs > 0 && !done)
+		return processJSON(p, !done, timeoutMs > 0 && !done, true)
 	}
 }
 
@@ -317,7 +325,7 @@ func handleProcessKill(pm *ProcessManager) server.ToolHandlerFunc {
 		if err := p.kill(); err != nil {
 			return errorResult(err.Error()), nil
 		}
-		return processJSON(p, false, false)
+		return processJSON(p, false, false, true)
 	}
 }
 
