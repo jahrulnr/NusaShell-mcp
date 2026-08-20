@@ -37,7 +37,10 @@ func TestLoadChunksRealFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	eng := NewRetrievalEngine(root)
-	chunks, scanned, hits, misses := eng.loadChunks(root, false)
+	chunks, scanned, hits, misses, err := eng.loadChunks(root, false)
+	if err != nil {
+		t.Fatalf("loadChunks: %v", err)
+	}
 	if len(chunks) == 0 {
 		t.Fatalf("expected chunks, got 0 (scanned=%d hits=%d misses=%d)", scanned, hits, misses)
 	}
@@ -50,9 +53,16 @@ func TestSearchRelevantPipeline(t *testing.T) {
 	root := t.TempDir()
 	_ = os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n\nfunc hello() {}\n"), 0o644)
 	eng := NewRetrievalEngine(root)
-	res := eng.searchRelevant("hello function", 5, "", false)
-	hits := res["filesScanned"]
-	if hits == 0 {
-		t.Fatalf("expected scanned >0, got %v; chunks=%v", hits, res["chunks"])
+	res, err := eng.searchRelevant("hello function", 5, "", false)
+	if err != nil {
+		t.Fatalf("searchRelevant: %v", err)
+	}
+	meta, _ := res["meta"].(map[string]any)
+	if meta == nil {
+		t.Fatal("expected meta in result")
+	}
+	scanned, _ := meta["filesScanned"].(int)
+	if scanned == 0 {
+		t.Fatalf("expected scanned >0, got %v; res=%v", scanned, res)
 	}
 }

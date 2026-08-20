@@ -281,6 +281,30 @@ func globToRegex(pattern string) *regexp.Regexp {
 	return re
 }
 
+// defaultIgnoredDirs are dependency/build output directories that a plain
+// grep or search walk must not descend into — one unqualified pattern would
+// otherwise flood the context with vendored duplicates (e.g. 40-language
+// CHANGELOGs under a vendored tree) and build outputs.
+var defaultIgnoredDirs = map[string]bool{
+	"node_modules": true,
+	"vendor":       true,
+	"dist":         true,
+	"build":        true,
+	"target":       true,
+	"__pycache__":  true,
+	"coverage":     true,
+	"venv":         true,
+}
+
+// isDefaultIgnored reports whether a walked entry is skipped by default:
+// hidden entries (.git, .experimental, dotfiles) and well-known
+// dependency/build directories. Only entries DISCOVERED during the walk are
+// filtered — passing a hidden or vendored directory explicitly as the path
+// root still searches inside it.
+func isDefaultIgnored(name string) bool {
+	return strings.HasPrefix(name, ".") || defaultIgnoredDirs[name]
+}
+
 func shouldExclude(name string, globs []string) bool {
 	if len(globs) == 0 {
 		return false
@@ -355,7 +379,7 @@ type DirEntry struct {
 }
 
 func (s *FileService) ListDir(input string) ([]DirEntry, error) {
-	dir, err := resolvePath(input)
+	dir, err := resolvePathOrRoot(input, s.root)
 	if err != nil {
 		return nil, err
 	}
@@ -414,7 +438,7 @@ func (s *FileService) Tree(input string, depth int, exclude []string, includeFil
 	if depth > maxTreeDepth {
 		depth = maxTreeDepth
 	}
-	dir, err := resolvePath(input)
+	dir, err := resolvePathOrRoot(input, s.root)
 	if err != nil {
 		return nil, err
 	}
@@ -916,7 +940,7 @@ func (s *FileService) SearchFiles(input, pattern string, exclude []string, ftype
 	if maxDepth <= 0 {
 		maxDepth = 10
 	}
-	dir, err := resolvePath(input)
+	dir, err := resolvePathOrRoot(input, s.root)
 	if err != nil {
 		return nil, err
 	}
@@ -951,6 +975,9 @@ func (s *FileService) searchRecursive(dir string, re *regexp.Regexp, results *[]
 	for _, entry := range entries {
 		if len(*results) >= maxSearchResults {
 			return
+		}
+		if isDefaultIgnored(entry.Name()) {
+			continue
 		}
 		if shouldExclude(entry.Name(), exclude) {
 			continue
@@ -994,7 +1021,7 @@ type GrepResult struct {
 
 func (s *FileService) GrepFiles(input, pattern string, opts GrepOpts) (map[string]any, error) {
 	started := time.Now()
-	target, err := resolvePath(input)
+	target, err := resolvePathOrRoot(input, s.root)
 	if err != nil {
 		return nil, err
 	}
@@ -1172,6 +1199,9 @@ func (s *FileService) grepRecursive(dir string, re, globRe *regexp.Regexp, resul
 	for _, entry := range entries {
 		if len(*results) >= cap {
 			return
+		}
+		if isDefaultIgnored(entry.Name()) {
+			continue
 		}
 		if shouldExclude(entry.Name(), exclude) {
 			continue

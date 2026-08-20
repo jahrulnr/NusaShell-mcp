@@ -56,9 +56,9 @@ func TestReadFileRejectsRelative(t *testing.T) {
 
 func TestSearchRelevantRejectsRelativeScope(t *testing.T) {
 	eng := NewRetrievalEngine("/tmp/root")
-	res := eng.searchRelevant("hello", 5, "sub", false)
-	if errMsg, ok := res["error"].(string); !ok || !strings.Contains(errMsg, "absolute path required") {
-		t.Fatalf("expected rejection in search_relevant, got %v", res)
+	_, err := eng.searchRelevant("hello", 5, "sub", false)
+	if err == nil || !strings.Contains(err.Error(), "absolute path required") {
+		t.Fatalf("expected rejection in search_relevant, got %v", err)
 	}
 }
 

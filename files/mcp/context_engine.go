@@ -480,7 +480,7 @@ func (e *ContextEngine) readWorkspaceInstructions() (map[string]any, bool) {
 
 // detectStack classifies the workspace from manifests at root + one level.
 func (e *ContextEngine) DetectStack(subPath string) (map[string]any, error) {
-	base, err := resolvePath(subPath)
+	base, err := resolvePathOrRoot(subPath, e.root)
 	if err != nil {
 		return nil, err
 	}
@@ -991,7 +991,7 @@ func (e *ContextEngine) ContextMap(subPath string, budget int, activeFile, query
 	useRole := role == "planner" || role == "executor" || role == "reviewer"
 	effectiveBudget := allocateRoleBudget(budget, role)
 	started := time.Now()
-	base, err := resolvePath(subPath)
+	base, err := resolvePathOrRoot(subPath, e.root)
 	if err != nil {
 		return nil, err
 	}

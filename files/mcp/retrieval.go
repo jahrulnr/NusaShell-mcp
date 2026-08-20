@@ -521,18 +521,18 @@ func (e *RetrievalEngine) SetRoot(root string) {
 	e.cache = map[string]retrievalCacheEntry{}
 }
 
-func (e *RetrievalEngine) searchRelevant(query string, topK int, scope string, refresh bool) map[string]any {
+func (e *RetrievalEngine) searchRelevant(query string, topK int, scope string, refresh bool) (map[string]any, error) {
 	return e.searchRelevantContext(context.Background(), query, topK, scope, refresh)
 }
 
-func (e *RetrievalEngine) searchRelevantContext(ctx context.Context, query string, topK int, scope string, refresh bool) map[string]any {
+func (e *RetrievalEngine) searchRelevantContext(ctx context.Context, query string, topK int, scope string, refresh bool) (map[string]any, error) {
 	t0 := time.Now()
 	q := strings.TrimSpace(query)
 	if q == "" {
-		return map[string]any{"error": "searchRelevant requires a non-empty query"}
+		return nil, fmt.Errorf("searchRelevant requires a non-empty query")
 	}
 	if err := ctx.Err(); err != nil {
-		return map[string]any{"error": err.Error()}
+		return nil, err
 	}
 	e.mu.RLock()
 	root := e.root
@@ -541,13 +541,16 @@ func (e *RetrievalEngine) searchRelevantContext(ctx context.Context, query strin
 	if scope != "" {
 		resolved, err := resolvePath(scope)
 		if err != nil {
-			return map[string]any{"error": err.Error()}
+			return nil, err
 		}
 		searchRoot = resolved
 	}
-	chunks, filesScanned, cacheHits, cacheMisses := e.loadChunksContext(ctx, searchRoot, refresh)
+	chunks, filesScanned, cacheHits, cacheMisses, err := e.loadChunksContext(ctx, searchRoot, refresh)
+	if err != nil {
+		return nil, fmt.Errorf("search_relevant timed out or was cancelled while indexing %d files (cold cache): %w — retry with a narrower scope or wait for indexing to complete", filesScanned, err)
+	}
 	if err := ctx.Err(); err != nil {
-		return map[string]any{"error": err.Error()}
+		return nil, err
 	}
 
 	k := topK
@@ -583,10 +586,10 @@ func (e *RetrievalEngine) searchRelevantContext(ctx context.Context, query strin
 			"cacheMisses":  cacheMisses,
 			"timingMs":     map[string]any{"total": time.Since(t0).Seconds() * 1000},
 		},
-	}
+	}, nil
 }
 
-func (e *RetrievalEngine) loadChunks(dir string, refresh bool) ([]retrievalChunk, int, int, int) {
+func (e *RetrievalEngine) loadChunks(dir string, refresh bool) ([]retrievalChunk, int, int, int, error) {
 	return e.loadChunksContext(context.Background(), dir, refresh)
 }
 
@@ -594,7 +597,7 @@ func (e *RetrievalEngine) loadChunks(dir string, refresh bool) ([]retrievalChunk
 // bypasses the cache for this scan instead of clearing shared state; clearing a
 // shared cache while another request is reading it was the source of a Go map
 // race in the original port.
-func (e *RetrievalEngine) loadChunksContext(ctx context.Context, dir string, refresh bool) ([]retrievalChunk, int, int, int) {
+func (e *RetrievalEngine) loadChunksContext(ctx context.Context, dir string, refresh bool) ([]retrievalChunk, int, int, int, error) {
 	var chunks []retrievalChunk
 	filesScanned, cacheHits, cacheMisses := 0, 0, 0
 
@@ -672,6 +675,8 @@ func (e *RetrievalEngine) loadChunksContext(ctx context.Context, dir string, ref
 		}
 		return nil
 	}
-	_ = walk(dir)
-	return chunks, filesScanned, cacheHits, cacheMisses
+	if err := walk(dir); err != nil {
+		return chunks, filesScanned, cacheHits, cacheMisses, err
+	}
+	return chunks, filesScanned, cacheHits, cacheMisses, nil
 }

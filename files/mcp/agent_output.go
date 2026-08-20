@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -153,13 +154,19 @@ func formatReadText(result map[string]any) string {
 	return joinLines(lines)
 }
 
+// formatGrepText renders the agent-facing grep receipt honoring output_mode:
+// content (default) shows path:line:content, files_with_matches shows only
+// the file paths (never the matched lines — the schema promises paths), and
+// count shows per-file match counts. Previously the formatter only handled
+// the content shape, so files_with_matches returned no paths at all.
 func formatGrepText(result map[string]any) string {
-	hits, _ := result["results"].([]GrepResult)
 	meta, _ := result["meta"].(map[string]any)
 	count := 0
 	truncated := false
 	if meta != nil {
 		if c, ok := meta["count"].(int); ok {
+			count = c
+		} else if c, ok := meta["fileCount"].(int); ok {
 			count = c
 		}
 		if t, ok := meta["truncated"].(bool); ok {
@@ -176,8 +183,27 @@ func formatGrepText(result map[string]any) string {
 		}),
 		"",
 	}
-	for _, hit := range hits {
-		lines = append(lines, fmt.Sprintf("%s:%d:%s", hit.Path, hit.Line, hit.Content))
+	switch {
+	case result["files"] != nil:
+		files, _ := result["files"].([]string)
+		for _, f := range files {
+			lines = append(lines, f)
+		}
+	case result["counts"] != nil:
+		counts, _ := result["counts"].(map[string]int)
+		paths := make([]string, 0, len(counts))
+		for p := range counts {
+			paths = append(paths, p)
+		}
+		sort.Strings(paths)
+		for _, p := range paths {
+			lines = append(lines, fmt.Sprintf("%d\t%s", counts[p], p))
+		}
+	default:
+		hits, _ := result["results"].([]GrepResult)
+		for _, hit := range hits {
+			lines = append(lines, fmt.Sprintf("%s:%d:%s", hit.Path, hit.Line, hit.Content))
+		}
 	}
 	lines = append(lines, "")
 	return joinLines(lines)
@@ -244,6 +270,12 @@ func formatGenericText(result any) string {
 	}
 	switch v := result.(type) {
 	case map[string]any:
+		// If the result carries an "error" key, do not add ok=true — the
+		// agent must see a clear failure, not an ambiguous ok+error mix.
+		if _, hasErr := v["error"]; hasErr {
+			msg, _ := v["error"].(string)
+			return "error=" + msg + "\n"
+		}
 		fields := map[string]any{"ok": true}
 		var complex []string
 		for k, val := range v {

@@ -35,6 +35,19 @@ func resolvePath(input string) (string, error) {
 	return filepath.Clean(input), nil
 }
 
+// resolvePathOrRoot resolves an absolute path, falling back to root when
+// input is empty. Use this for read-only tools whose schema promises
+// "empty = workspace root" (list, tree, search, grep, context_map,
+// detect_stack). Use resolvePath for mutation tools where an empty path
+// is never meaningful (write, mkdir, move, copy, delete, read, info,
+// patch, append).
+func resolvePathOrRoot(input, root string) (string, error) {
+	if input == "" {
+		return filepath.Clean(root), nil
+	}
+	return resolvePath(input)
+}
+
 // errAbsolutePathRequired is the error returned for relative/empty paths.
 func errAbsolutePathRequired(input string) error {
 	return fmt.Errorf("absolute path required: got %q. This MCP server is shared and does not resolve relative paths; pass an absolute path.", input)

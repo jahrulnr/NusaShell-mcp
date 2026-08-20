@@ -23,7 +23,11 @@ func TestRetrievalEngineConcurrentSearchIsSafe(t *testing.T) {
 		wg.Add(1)
 		go func(refresh bool) {
 			defer wg.Done()
-			result := eng.searchRelevant("hello function", 5, "", refresh)
+			result, err := eng.searchRelevant("hello function", 5, "", refresh)
+			if err != nil {
+				t.Errorf("search failed: %v", err)
+				return
+			}
 			if result["error"] != nil {
 				t.Errorf("search failed: %v", result["error"])
 			}
@@ -44,8 +48,8 @@ func TestRetrievalEngineCancellation(t *testing.T) {
 	eng := NewRetrievalEngine(root)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	result := eng.searchRelevantContext(ctx, "hello function", 5, "", false)
-	if result["error"] == nil {
+	_, err := eng.searchRelevantContext(ctx, "hello function", 5, "", false)
+	if err == nil {
 		t.Fatal("expected cancelled search to return an error")
 	}
 }
