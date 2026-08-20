@@ -14,7 +14,7 @@ func registerTools(s *server.MCPServer, svc *FileService) {
 	s.AddTool(mcp.NewTool("list",
 		mcp.WithDescription("List directory contents with file metadata (name, size, modified, type)."),
 		mcp.WithString("path",
-			mcp.Description("Directory path relative to the files plugin root. Use empty string for root."),
+			mcp.Description("Absolute directory path. Use empty string for the workspace root."),
 		),
 		mcp.WithReadOnlyHintAnnotation(true),
 	), withHandlerTimeout(30*time.Second, handleList(svc)))
@@ -23,7 +23,7 @@ func registerTools(s *server.MCPServer, svc *FileService) {
 	s.AddTool(mcp.NewTool("tree",
 		mcp.WithDescription("Recursive directory tree up to a depth limit. Supports exclude globs and includeFiles filter."),
 		mcp.WithString("path",
-			mcp.Description("Directory path relative to the files plugin root."),
+			mcp.Description("Absolute directory path."),
 		),
 		mcp.WithNumber("depth",
 			mcp.Description("Maximum tree depth (1-10)."),
@@ -44,7 +44,7 @@ func registerTools(s *server.MCPServer, svc *FileService) {
 	s.AddTool(mcp.NewTool("read",
 		mcp.WithDescription("Read a text file. Use start/end for a line range, or head/tail for first/last N lines. Binary files are rejected."),
 		mcp.WithString("path", mcp.Required(),
-			mcp.Description("File path relative to the files plugin root."),
+			mcp.Description("Absolute file path."),
 		),
 		mcp.WithNumber("head", mcp.Description("Number of lines from the top."), mcp.Min(1.0)),
 		mcp.WithNumber("tail", mcp.Description("Number of lines from the bottom."), mcp.Min(1.0)),
@@ -58,7 +58,7 @@ func registerTools(s *server.MCPServer, svc *FileService) {
 	// write
 	s.AddTool(mcp.NewTool("write",
 		mcp.WithDescription("Write content to a file. Creates parent directories. Atomic (write-to-temp-then-rename)."),
-		mcp.WithString("path", mcp.Required(), mcp.Description("File path.")),
+		mcp.WithString("path", mcp.Required(), mcp.Description("Absolute file path.")),
 		mcp.WithString("content", mcp.Required(), mcp.Description("Content to write (UTF-8 text, max 10 MB).")),
 		mcp.WithString("encoding", mcp.Description("Encoding: 'utf8' (default) or 'base64'."), mcp.Enum("utf8", "base64")),
 		mcp.WithIdempotentHintAnnotation(true),
@@ -67,30 +67,30 @@ func registerTools(s *server.MCPServer, svc *FileService) {
 	// mkdir
 	s.AddTool(mcp.NewTool("mkdir",
 		mcp.WithDescription("Create a directory, including any missing parents."),
-		mcp.WithString("path", mcp.Required(), mcp.Description("Directory path.")),
+		mcp.WithString("path", mcp.Required(), mcp.Description("Absolute directory path.")),
 		mcp.WithIdempotentHintAnnotation(true),
 	), handleMkdir(svc))
 
 	// move
 	s.AddTool(mcp.NewTool("move",
 		mcp.WithDescription("Move/rename a file or directory."),
-		mcp.WithString("source", mcp.Required(), mcp.Description("Source path.")),
-		mcp.WithString("destination", mcp.Required(), mcp.Description("Destination path.")),
+		mcp.WithString("source", mcp.Required(), mcp.Description("Absolute source path.")),
+		mcp.WithString("destination", mcp.Required(), mcp.Description("Absolute destination path.")),
 		mcp.WithIdempotentHintAnnotation(true),
 	), handleMove(svc))
 
 	// copy
 	s.AddTool(mcp.NewTool("copy",
 		mcp.WithDescription("Copy a file or directory recursively."),
-		mcp.WithString("source", mcp.Required(), mcp.Description("Source path.")),
-		mcp.WithString("destination", mcp.Required(), mcp.Description("Destination path.")),
+		mcp.WithString("source", mcp.Required(), mcp.Description("Absolute source path.")),
+		mcp.WithString("destination", mcp.Required(), mcp.Description("Absolute destination path.")),
 		mcp.WithIdempotentHintAnnotation(true),
 	), handleCopy(svc))
 
 	// delete
 	s.AddTool(mcp.NewTool("delete",
 		mcp.WithDescription("Delete a file or directory. Directories require recursive=true if not empty."),
-		mcp.WithString("path", mcp.Required(), mcp.Description("Path to delete.")),
+		mcp.WithString("path", mcp.Required(), mcp.Description("Absolute path to delete.")),
 		mcp.WithBoolean("recursive", mcp.Description("Allow deleting non-empty directories.")),
 		mcp.WithDestructiveHintAnnotation(true),
 	), handleDelete(svc))
@@ -98,7 +98,7 @@ func registerTools(s *server.MCPServer, svc *FileService) {
 	// search
 	s.AddTool(mcp.NewTool("search",
 		mcp.WithDescription("Search for files by name pattern (glob: * and ?). Supports exclude, type filter, and maxDepth."),
-		mcp.WithString("path", mcp.Description("Search root directory relative to the files plugin root.")),
+		mcp.WithString("path", mcp.Description("Absolute search root directory.")),
 		mcp.WithString("pattern", mcp.Required(), mcp.Description("Glob pattern (e.g. *.txt, config.*).")),
 		mcp.WithArray("exclude",
 			mcp.Description("Glob patterns to exclude."),
@@ -113,7 +113,7 @@ func registerTools(s *server.MCPServer, svc *FileService) {
 	// info
 	s.AddTool(mcp.NewTool("info",
 		mcp.WithDescription("Get detailed file metadata (size, dates, permissions, type)."),
-		mcp.WithString("path", mcp.Required(), mcp.Description("File or directory path.")),
+		mcp.WithString("path", mcp.Required(), mcp.Description("Absolute file or directory path.")),
 		mcp.WithReadOnlyHintAnnotation(true),
 	), withHandlerTimeout(30*time.Second, handleInfo(svc)))
 
@@ -121,7 +121,7 @@ func registerTools(s *server.MCPServer, svc *FileService) {
 	s.AddTool(mcp.NewTool("grep",
 		mcp.WithDescription("Search file contents for a regex pattern (like grep). path may be a directory (recursive) or a single file. "+
 			"output_mode: 'content' (default, returns matching lines with context), 'files_with_matches' (returns just file paths that contain matches), 'count' (returns per-file match counts)."),
-		mcp.WithString("path", mcp.Description("Directory or single file to search.")),
+		mcp.WithString("path", mcp.Description("Absolute directory or single file to search.")),
 		mcp.WithString("pattern", mcp.Required(), mcp.Description("Regular expression pattern.")),
 		mcp.WithString("glob", mcp.Description("Optional file name glob filter (e.g. '*.js').")),
 		mcp.WithNumber("before", mcp.Description("Context lines before match (0-10)."), mcp.Min(0.0), mcp.Max(10.0)),
@@ -143,7 +143,7 @@ func registerTools(s *server.MCPServer, svc *FileService) {
 			"By default old_string must match exactly once; if it matches multiple times the call fails with the line numbers of every match. "+
 			"Disambiguate duplicates with replace_all=true, occurrence_index=N (1-based), or context_before/context_after (anchor text immediately before/after the match). "+
 			"Supports preview mode."),
-		mcp.WithString("path", mcp.Required(), mcp.Description("File path.")),
+		mcp.WithString("path", mcp.Required(), mcp.Description("Absolute file path.")),
 		mcp.WithAny("edits",
 			mcp.Description("A single edit object or an array of edits. Each edit: { old_string, new_string, replace_all?, occurrence_index?, context_before?, context_after? }."),
 			mcp.Required(),
@@ -155,7 +155,7 @@ func registerTools(s *server.MCPServer, svc *FileService) {
 	// append
 	s.AddTool(mcp.NewTool("append",
 		mcp.WithDescription("Append content to the end of a file. Creates the file if it does not exist."),
-		mcp.WithString("path", mcp.Required(), mcp.Description("File path.")),
+		mcp.WithString("path", mcp.Required(), mcp.Description("Absolute file path.")),
 		mcp.WithString("content", mcp.Required(), mcp.Description("Content to append.")),
 		mcp.WithIdempotentHintAnnotation(true),
 	), writeCap(handleAppend(svc)))
@@ -163,14 +163,14 @@ func registerTools(s *server.MCPServer, svc *FileService) {
 	// exists
 	s.AddTool(mcp.NewTool("exists",
 		mcp.WithDescription("Check if a path exists. Returns { exists, isFile, isDir }. Does NOT throw on missing paths."),
-		mcp.WithString("path", mcp.Required(), mcp.Description("File or directory path.")),
+		mcp.WithString("path", mcp.Required(), mcp.Description("Absolute file or directory path.")),
 		mcp.WithReadOnlyHintAnnotation(true),
 	), withHandlerTimeout(10*time.Second, handleExists(svc)))
 
 	// touch
 	s.AddTool(mcp.NewTool("touch",
 		mcp.WithDescription("Create an empty file if it doesn't exist, or update its timestamps if it does."),
-		mcp.WithString("path", mcp.Required(), mcp.Description("File path.")),
+		mcp.WithString("path", mcp.Required(), mcp.Description("Absolute file path.")),
 		mcp.WithBoolean("createParents", mcp.Description("Create parent directories if needed (default true).")),
 		mcp.WithBoolean("updateOnly", mcp.Description("Only update timestamps of an existing file; throw if it doesn't exist.")),
 		mcp.WithIdempotentHintAnnotation(true),
@@ -188,7 +188,7 @@ func registerTools(s *server.MCPServer, svc *FileService) {
 func contextMapTool() mcp.Tool {
 	return mcp.NewTool("context_map",
 		mcp.WithDescription("Build a token-budgeted markdown map of the repo: stack classification, top files ranked by Personalized PageRank over the symbol reference graph, and elided signatures. Optional role (planner|executor|reviewer) enables role-aware budgeting. Returns { map, stack, ranks, stats } and roleScores when role is set."),
-		mcp.WithString("path", mcp.Description("Directory to map relative to the files plugin root. Empty string maps the whole root.")),
+		mcp.WithString("path", mcp.Description("Absolute directory path to map. Empty string maps the whole workspace root.")),
 		mcp.WithNumber("budget", mcp.Description("Approximate token budget (default 1024)."), mcp.Min(64.0), mcp.Max(8192.0)),
 		mcp.WithString("activeFile", mcp.Description("Workspace-relative file currently in focus; boosted 50x.")),
 		mcp.WithString("query", mcp.Description("Space-separated symbol-name terms; matching files get a 10x boost.")),
@@ -201,14 +201,14 @@ func contextMapTool() mcp.Tool {
 func detectStackTool() mcp.Tool {
 	return mcp.NewTool("detect_stack",
 		mcp.WithDescription("Classify the workspace from manifest files (package.json, Cargo.toml, pyproject.toml, go.mod, ...): category, languages, manifests, key deps, package.json scripts. Reads manifests only."),
-		mcp.WithString("path", mcp.Description("Directory to classify relative to the files plugin root.")),
+		mcp.WithString("path", mcp.Description("Absolute directory path to classify.")),
 	)
 }
 
 func listSymbolsTool() mcp.Tool {
 	return mcp.NewTool("list_symbols",
 		mcp.WithDescription("List symbol definitions (class/function/const/type with kind, line, signature) for one file, or across top-ranked files matching a query."),
-		mcp.WithString("path", mcp.Description("Single file path. Omit to search by query.")),
+		mcp.WithString("path", mcp.Description("Absolute single file path. Omit to search by query.")),
 		mcp.WithString("query", mcp.Description("Case-insensitive symbol-name filter; required when path omitted.")),
 		mcp.WithNumber("limit", mcp.Description("Max files in query mode (default 20)."), mcp.Min(1.0), mcp.Max(100.0)),
 	)
@@ -219,7 +219,7 @@ func searchRelevantTool() mcp.Tool {
 		mcp.WithDescription("Semantic code search: retrieve most relevant files/chunks for a query (BM25 + TF-IDF, Reciprocal Rank Fusion, cross-encoder proxy). Returns { files, results, meta }."),
 		mcp.WithString("query", mcp.Required(), mcp.Description("Search query - plain-text description of the code/symbols you are looking for.")),
 		mcp.WithNumber("topK", mcp.Description("Max results (1-20, default 5)."), mcp.Min(1.0), mcp.Max(20.0)),
-		mcp.WithString("path", mcp.Description("Directory to scope the search to. Empty = whole root.")),
+		mcp.WithString("path", mcp.Description("Absolute directory to scope the search to. Empty = whole root.")),
 		mcp.WithBoolean("refresh", mcp.Description("Bypass the mtime/size chunk cache.")),
 	)
 }
