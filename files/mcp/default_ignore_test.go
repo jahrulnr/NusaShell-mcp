@@ -48,7 +48,7 @@ func TestGrepDefaultIgnoresNoise(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected files list, got %T", result["files"])
 	}
-	if len(files) != 1 || !strings.HasSuffix(files[0], "src/app.go") {
+	if len(files) != 1 || !strings.HasSuffix(filepath.ToSlash(files[0]), "src/app.go") {
 		t.Fatalf("default ignore failed: expected only src/app.go, got %v", files)
 	}
 }

@@ -1,31 +1,40 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
 func TestResolvePathOrRootEmptyReturnsRoot(t *testing.T) {
-	got, err := resolvePathOrRoot("", "/home/user/workspace")
+	root := t.TempDir()
+	got, err := resolvePathOrRoot("", root)
 	if err != nil {
 		t.Fatalf("empty path should resolve to root, got error: %v", err)
 	}
-	if got != "/home/user/workspace" {
-		t.Errorf("empty path = %q, want %q", got, "/home/user/workspace")
+	if want, _ := filepath.Abs(root); got != want {
+		t.Errorf("empty path = %q, want %q", got, want)
 	}
 }
 
 func TestResolvePathOrRootNonEmptyDelegates(t *testing.T) {
-	got, err := resolvePathOrRoot("/srv/app", "/home/user/workspace")
+	root := t.TempDir()
+	target := filepath.Join(root, "sub")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := resolvePathOrRoot(target, root)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != "/srv/app" {
-		t.Errorf("got %q, want /srv/app", got)
+	if got != filepath.Clean(target) {
+		t.Errorf("got %q, want %q", got, filepath.Clean(target))
 	}
 }
 
 func TestResolvePathOrRootRejectsRelative(t *testing.T) {
-	_, err := resolvePathOrRoot("relative/path", "/home/user/workspace")
+	root := t.TempDir()
+	_, err := resolvePathOrRoot("relative/path", root)
 	if err == nil {
 		t.Fatal("relative path should be rejected even when root is provided")
 	}
