@@ -281,30 +281,6 @@ func globToRegex(pattern string) *regexp.Regexp {
 	return re
 }
 
-// defaultIgnoredDirs are dependency/build output directories that a plain
-// grep or search walk must not descend into — one unqualified pattern would
-// otherwise flood the context with vendored duplicates (e.g. 40-language
-// CHANGELOGs under a vendored tree) and build outputs.
-var defaultIgnoredDirs = map[string]bool{
-	"node_modules": true,
-	"vendor":       true,
-	"dist":         true,
-	"build":        true,
-	"target":       true,
-	"__pycache__":  true,
-	"coverage":     true,
-	"venv":         true,
-}
-
-// isDefaultIgnored reports whether a walked entry is skipped by default:
-// hidden entries (.git, .experimental, dotfiles) and well-known
-// dependency/build directories. Only entries DISCOVERED during the walk are
-// filtered — passing a hidden or vendored directory explicitly as the path
-// root still searches inside it.
-func isDefaultIgnored(name string) bool {
-	return strings.HasPrefix(name, ".") || defaultIgnoredDirs[name]
-}
-
 func shouldExclude(name string, globs []string) bool {
 	if len(globs) == 0 {
 		return false
@@ -445,10 +421,10 @@ func (s *FileService) Tree(input string, depth int, exclude []string, includeFil
 	if _, err := os.Stat(dir); err != nil {
 		return nil, s.wrapErr(input, err)
 	}
-	return s.buildTree(dir, depth, exclude, includeFiles)
+	return s.buildTree(dir, depth, exclude, includeFiles, newWalkIgnore(dir))
 }
 
-func (s *FileService) buildTree(dir string, depth int, exclude []string, includeFiles bool) ([]TreeNode, error) {
+func (s *FileService) buildTree(dir string, depth int, exclude []string, includeFiles bool, ign *walkIgnore) ([]TreeNode, error) {
 	if depth <= 0 {
 		return nil, nil
 	}
@@ -456,12 +432,16 @@ func (s *FileService) buildTree(dir string, depth int, exclude []string, include
 	if err != nil {
 		return nil, nil
 	}
+	local := ign.child(dir)
 	var nodes []TreeNode
 	for _, entry := range entries {
+		entryPath := filepath.Join(dir, entry.Name())
+		if local.skip(entry.Name(), entryPath) {
+			continue
+		}
 		if shouldExclude(entry.Name(), exclude) {
 			continue
 		}
-		entryPath := filepath.Join(dir, entry.Name())
 		info, err := entry.Info()
 		if err != nil {
 			continue
@@ -479,7 +459,7 @@ func (s *FileService) buildTree(dir string, depth int, exclude []string, include
 			Type:     cond(isDir, "dir", detectFileType(entry.Name())),
 		}
 		if isDir && depth > 1 {
-			children, _ := s.buildTree(entryPath, depth-1, exclude, includeFiles)
+			children, _ := s.buildTree(entryPath, depth-1, exclude, includeFiles, local)
 			node.Children = children
 		}
 		nodes = append(nodes, node)
@@ -949,12 +929,14 @@ func (s *FileService) SearchFiles(input, pattern string, exclude []string, ftype
 	}
 	re := globToRegex(pattern)
 	var results []SearchResult
-	s.searchRecursive(dir, re, &results, exclude, ftype, maxDepth, 1)
+	collectCap := maxSearchResults + 1
+	s.searchRecursive(dir, re, &results, exclude, ftype, maxDepth, 1, newWalkIgnore(dir), collectCap)
 	truncated := len(results) > maxSearchResults
-	if len(results) > maxSearchResults {
+	if truncated {
 		results = results[:maxSearchResults]
 	}
 	return map[string]any{
+		"path":    dir,
 		"results": results,
 		"meta": map[string]any{
 			"truncated": truncated,
@@ -964,25 +946,26 @@ func (s *FileService) SearchFiles(input, pattern string, exclude []string, ftype
 	}, nil
 }
 
-func (s *FileService) searchRecursive(dir string, re *regexp.Regexp, results *[]SearchResult, exclude []string, ftype string, maxDepth, currentDepth int) {
-	if len(*results) >= maxSearchResults || currentDepth > maxDepth {
+func (s *FileService) searchRecursive(dir string, re *regexp.Regexp, results *[]SearchResult, exclude []string, ftype string, maxDepth, currentDepth int, ign *walkIgnore, cap int) {
+	if len(*results) >= cap || currentDepth > maxDepth {
 		return
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
+	local := ign.child(dir)
 	for _, entry := range entries {
-		if len(*results) >= maxSearchResults {
+		if len(*results) >= cap {
 			return
 		}
-		if isDefaultIgnored(entry.Name()) {
+		entryPath := filepath.Join(dir, entry.Name())
+		if local.skip(entry.Name(), entryPath) {
 			continue
 		}
 		if shouldExclude(entry.Name(), exclude) {
 			continue
 		}
-		entryPath := filepath.Join(dir, entry.Name())
 		info, err := entry.Info()
 		if err != nil {
 			continue
@@ -1005,7 +988,7 @@ func (s *FileService) searchRecursive(dir string, re *regexp.Regexp, results *[]
 			})
 		}
 		if isDir {
-			s.searchRecursive(entryPath, re, results, exclude, ftype, maxDepth, currentDepth+1)
+			s.searchRecursive(entryPath, re, results, exclude, ftype, maxDepth, currentDepth+1, local, cap)
 		}
 	}
 }
@@ -1021,6 +1004,9 @@ type GrepResult struct {
 
 func (s *FileService) GrepFiles(input, pattern string, opts GrepOpts) (map[string]any, error) {
 	started := time.Now()
+	if strings.TrimSpace(pattern) == "" {
+		return nil, fmt.Errorf("pattern is required and must be a non-empty regular expression. grep takes {pattern, path}, not a shell command — use nusashell.terminal:exec for command + cwd.")
+	}
 	target, err := resolvePathOrRoot(input, s.root)
 	if err != nil {
 		return nil, err
@@ -1056,18 +1042,22 @@ func (s *FileService) GrepFiles(input, pattern string, opts GrepOpts) (map[strin
 		before, after = 0, 0
 	}
 
+	// Collect one extra hit so truncated is true iff at least one match
+	// beyond the cap exists. The walk used to stop at len >= cap, which
+	// made `truncated := len(results) > cap` dead code.
+	collectCap := cap + 1
 	var results []GrepResult
 	if !stat.IsDir() {
 		name := filepath.Base(target)
 		if globRe == nil || globRe.MatchString(name) {
-			s.grepOneFile(target, name, re, &results, before, after, cap)
+			s.grepOneFile(target, name, re, &results, before, after, collectCap)
 		}
 	} else {
-		s.grepRecursive(target, re, globRe, &results, before, after, opts.Exclude, cap)
+		s.grepRecursive(target, re, globRe, &results, before, after, opts.Exclude, collectCap, newWalkIgnore(target))
 	}
 
 	truncated := len(results) > cap
-	if len(results) > cap {
+	if truncated {
 		results = results[:cap]
 	}
 	stderr("grep %s (input=%q, mode=%s, %d results) took %s", target, input, opts.OutputMode, len(results), time.Since(started).Round(time.Millisecond))
@@ -1083,6 +1073,7 @@ func (s *FileService) GrepFiles(input, pattern string, opts GrepOpts) (map[strin
 			}
 		}
 		return map[string]any{
+			"path":  target,
 			"files": files,
 			"meta": map[string]any{
 				"truncated": truncated,
@@ -1096,6 +1087,7 @@ func (s *FileService) GrepFiles(input, pattern string, opts GrepOpts) (map[strin
 			counts[r.Path]++
 		}
 		return map[string]any{
+			"path":   target,
 			"counts": counts,
 			"meta": map[string]any{
 				"truncated":    truncated,
@@ -1107,6 +1099,7 @@ func (s *FileService) GrepFiles(input, pattern string, opts GrepOpts) (map[strin
 	default:
 		// "content" or unrecognized → return full results (backward compat).
 		return map[string]any{
+			"path":    target,
 			"results": results,
 			"meta": map[string]any{
 				"truncated": truncated,
@@ -1188,7 +1181,7 @@ func (s *FileService) grepOneFile(entryPath, entryName string, re *regexp.Regexp
 	}
 }
 
-func (s *FileService) grepRecursive(dir string, re, globRe *regexp.Regexp, results *[]GrepResult, before, after int, exclude []string, cap int) {
+func (s *FileService) grepRecursive(dir string, re, globRe *regexp.Regexp, results *[]GrepResult, before, after int, exclude []string, cap int, ign *walkIgnore) {
 	if len(*results) >= cap {
 		return
 	}
@@ -1196,19 +1189,20 @@ func (s *FileService) grepRecursive(dir string, re, globRe *regexp.Regexp, resul
 	if err != nil {
 		return
 	}
+	local := ign.child(dir)
 	for _, entry := range entries {
 		if len(*results) >= cap {
 			return
 		}
-		if isDefaultIgnored(entry.Name()) {
+		entryPath := filepath.Join(dir, entry.Name())
+		if local.skip(entry.Name(), entryPath) {
 			continue
 		}
 		if shouldExclude(entry.Name(), exclude) {
 			continue
 		}
-		entryPath := filepath.Join(dir, entry.Name())
 		if entry.IsDir() {
-			s.grepRecursive(entryPath, re, globRe, results, before, after, exclude, cap)
+			s.grepRecursive(entryPath, re, globRe, results, before, after, exclude, cap, local)
 			continue
 		}
 		if globRe != nil && !globRe.MatchString(entry.Name()) {

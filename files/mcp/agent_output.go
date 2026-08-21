@@ -27,7 +27,7 @@ func formatSize(bytes int64) string {
 
 func displayPath(value string) string {
 	if value == "" {
-		return "."
+		return "(unresolved)"
 	}
 	return value
 }
