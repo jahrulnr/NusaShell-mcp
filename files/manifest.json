@@ -1,7 +1,7 @@
 {
   "id": "nusashell.files",
   "name": "Files",
-  "version": "2.1.2",
+  "version": "2.1.3",
   "icon": "\ud83d\udcc2",
   "ui": {
     "entry": "ui/index.html",

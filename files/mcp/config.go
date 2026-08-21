@@ -36,11 +36,12 @@ func resolvePath(input string) (string, error) {
 }
 
 // resolvePathOrRoot resolves an absolute path, falling back to root when
-// input is empty. Use this for read-only tools whose schema promises
-// "empty = workspace root" (list, tree, search, grep, context_map,
-// detect_stack). Use resolvePath for mutation tools where an empty path
-// is never meaningful (write, mkdir, move, copy, delete, read, info,
-// patch, append).
+// input is empty. Read-only tools (list, tree, search, grep, context_map,
+// detect_stack) use this. Empty means the Files default root (typically
+// the user home directory) — not a per-conversation workspace, because
+// this server is shared across agents. Use resolvePath for mutation tools
+// where an empty path is never meaningful (write, mkdir, move, copy,
+// delete, read, info, patch, append).
 func resolvePathOrRoot(input, root string) (string, error) {
 	if input == "" {
 		return filepath.Clean(root), nil

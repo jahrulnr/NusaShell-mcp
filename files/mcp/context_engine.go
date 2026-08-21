@@ -66,17 +66,6 @@ var keyDepPrefixes = []string{
 	"django", "flask", "axum", "tokio",
 }
 
-var defaultIgnoreDirs = map[string]bool{
-	".git": true, ".hg": true, ".svn": true, "node_modules": true,
-	"target": true, "dist": true, "build": true, ".next": true,
-	".nuxt": true, ".cache": true, ".turbo": true, "coverage": true,
-	".vitest": true, "out": true, "__pycache__": true, ".pytest_cache": true,
-	".mypy_cache": true, ".ruff_cache": true, "vendor": true, ".venv": true,
-	"venv": true, "env": true, ".idea": true, ".vscode": true,
-}
-
-var ignoreFileNames = []string{".gitignore", ".ignore"}
-
 var identRe = regexp.MustCompile(`[A-Za-z_$][A-Za-z0-9_$]*`)
 
 var keywords = func() map[string]bool {
@@ -253,71 +242,6 @@ func personalizedPagerank(nodes []string, outEdges map[string][]string, personal
 		scores[f] = rank[i]
 	}
 	return scores
-}
-
-func escapeRegExp(text string) string {
-	re := regexp.MustCompile(`[.+^${}()|[\]\\]`)
-	return re.ReplaceAllString(text, `\$0`)
-}
-
-// matchesIgnore implements minimal gitignore-style matching over posix rel paths.
-func matchesIgnore(relPosix string, patterns []string) bool {
-	parts := strings.Split(relPosix, "/")
-	name := parts[len(parts)-1]
-	for _, raw := range patterns {
-		pat := raw
-		if strings.HasSuffix(pat, "/") {
-			pat = pat[:len(pat)-1]
-		}
-		if strings.HasPrefix(pat, "/") {
-			pat = pat[1:]
-			if relPosix == pat || strings.HasPrefix(relPosix, pat+"/") {
-				return true
-			}
-			continue
-		}
-		if strings.Contains(pat, "*") {
-			escaped := ""
-			for i, piece := range strings.Split(pat, "*") {
-				if i > 0 {
-					escaped += ".*"
-				}
-				escaped += escapeRegExp(piece)
-			}
-			if re, err := regexp.Compile("^" + escaped + "$"); err == nil {
-				if re.MatchString(name) || re.MatchString(relPosix) {
-					return true
-				}
-			}
-		} else if name == pat {
-			return true
-		} else {
-			for _, part := range parts {
-				if part == pat {
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
-func readIgnorePatterns(dir string) []string {
-	var patterns []string
-	for _, name := range ignoreFileNames {
-		data, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			continue
-		}
-		for _, line := range strings.Split(string(data), "\n") {
-			trimmed := strings.TrimSpace(strings.TrimSuffix(line, "\r"))
-			if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-				continue
-			}
-			patterns = append(patterns, trimmed)
-		}
-	}
-	return patterns
 }
 
 type walkFile struct {
@@ -609,12 +533,11 @@ func (e *ContextEngine) WalkWorkspace(base string, maxFiles int) ([]walkFile, wa
 	}
 	var files []walkFile
 	var stats walkStats
-	rootPatterns := readIgnorePatterns(base)
 	type qitem struct {
-		dir      string
-		patterns []string
+		dir string
+		ign *walkIgnore
 	}
-	queue := []qitem{{dir: base, patterns: rootPatterns}}
+	queue := []qitem{{dir: base, ign: newWalkIgnore(base)}}
 	seenDirs := map[string]bool{}
 	for len(queue) > 0 && len(files) < maxFiles {
 		item := queue[0]
@@ -629,7 +552,7 @@ func (e *ContextEngine) WalkWorkspace(base string, maxFiles int) ([]walkFile, wa
 			continue
 		}
 		sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
-		localPatterns := append(append([]string{}, item.patterns...), readIgnorePatterns(item.dir)...)
+		local := item.ign.child(item.dir)
 
 		for _, entry := range entries {
 			if len(files) >= maxFiles {
@@ -638,32 +561,20 @@ func (e *ContextEngine) WalkWorkspace(base string, maxFiles int) ([]walkFile, wa
 			abs := filepath.Join(item.dir, entry.Name())
 			rel := absPath(abs, entry.Name())
 			if entry.IsDir() {
-				if strings.HasPrefix(entry.Name(), ".") || defaultIgnoreDirs[entry.Name()] {
+				if local.skip(entry.Name(), abs) {
 					continue
 				}
-				if matchesIgnore(rel, localPatterns) {
-					continue
-				}
-				queue = append(queue, qitem{dir: abs, patterns: localPatterns})
+				queue = append(queue, qitem{dir: abs, ign: local})
 				continue
 			}
 			if !entry.Type().IsRegular() {
 				continue
 			}
-			if strings.HasPrefix(entry.Name(), ".") {
-				isIgnore := false
-				for _, n := range ignoreFileNames {
-					if entry.Name() == n {
-						isIgnore = true
-						break
-					}
-				}
-				if !isIgnore {
-					continue
-				}
+			if isDefaultIgnored(entry.Name()) {
+				continue
 			}
 			stats.ConsideredFiles++
-			if matchesIgnore(rel, localPatterns) {
+			if local.gitIgnored(abs) {
 				stats.IgnoredFiles++
 				continue
 			}

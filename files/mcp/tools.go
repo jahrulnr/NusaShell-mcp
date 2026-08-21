@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -14,16 +15,17 @@ func registerTools(s *server.MCPServer, svc *FileService) {
 	s.AddTool(mcp.NewTool("list",
 		mcp.WithDescription("List directory contents with file metadata (name, size, modified, type)."),
 		mcp.WithString("path",
-			mcp.Description("Absolute directory path, or empty for the workspace root."),
+			mcp.Description("Absolute directory path. Empty uses the Files default root (user home), not a per-conversation workspace."),
 		),
 		mcp.WithReadOnlyHintAnnotation(true),
 	), withHandlerTimeout(30*time.Second, handleList(svc)))
 
 	// tree
 	s.AddTool(mcp.NewTool("tree",
-		mcp.WithDescription("Recursive directory tree up to a depth limit. Supports exclude globs and includeFiles filter."),
+		mcp.WithDescription("Recursive directory tree up to a depth limit. Supports exclude globs and includeFiles filter. "+
+			"Skips .git, hidden entries, common build/dependency dirs, and .gitignore/.ignore patterns by default; pass such a directory as path to inspect it explicitly."),
 		mcp.WithString("path",
-			mcp.Description("Absolute directory path, or empty for the workspace root."),
+			mcp.Description("Absolute directory path. Empty uses the Files default root (user home), not a per-conversation workspace."),
 		),
 		mcp.WithNumber("depth",
 			mcp.Description("Maximum tree depth (1-10)."),
@@ -98,9 +100,10 @@ func registerTools(s *server.MCPServer, svc *FileService) {
 	// search
 	s.AddTool(mcp.NewTool("search",
 		mcp.WithDescription("Search for files by name pattern (glob: * and ?). Supports exclude, type filter, and maxDepth. "+
-			"Skips hidden entries (.git, dotfiles) and common dependency/build directories (node_modules, vendor, dist, build, target, __pycache__, coverage, venv) by default; pass such a directory as path to search inside it explicitly."),
-		mcp.WithString("path", mcp.Description("Absolute search root directory, or empty for the workspace root.")),
-		mcp.WithString("pattern", mcp.Required(), mcp.Description("Glob pattern (e.g. *.txt, config.*).")),
+			"Skips .git, hidden entries, common build/dependency dirs (node_modules, vendor, dist, build, target, __pycache__, coverage, venv, out), and .gitignore/.ignore patterns by default; pass such a directory as path to search inside it explicitly. "+
+			"Does not accept shell exec arguments (command/cwd) — those belong to nusashell.terminal:exec."),
+		mcp.WithString("path", mcp.Description("Absolute search root. Empty uses the Files default root (user home), not a per-conversation workspace.")),
+		mcp.WithString("pattern", mcp.Required(), mcp.Description("Glob pattern (e.g. *.txt, config.*). Required and must be non-empty.")),
 		mcp.WithArray("exclude",
 			mcp.Description("Glob patterns to exclude."),
 			mcp.MaxItems(20),
@@ -120,11 +123,13 @@ func registerTools(s *server.MCPServer, svc *FileService) {
 
 	// grep
 	s.AddTool(mcp.NewTool("grep",
-		mcp.WithDescription("Search file contents for a regex pattern (like grep). path may be a directory (recursive) or a single file. "+
-			"output_mode: 'content' (default, returns matching lines with context), 'files_with_matches' (returns just file paths that contain matches), 'count' (returns per-file match counts). "+
-			"Skips hidden entries (.git, dotfiles) and common dependency/build directories (node_modules, vendor, dist, build, target, __pycache__, coverage, venv) by default; pass such a directory as path to search inside it explicitly."),
-		mcp.WithString("path", mcp.Description("Absolute directory or single file to search, or empty for the workspace root.")),
-		mcp.WithString("pattern", mcp.Required(), mcp.Description("Regular expression pattern.")),
+		mcp.WithDescription("Search file contents for a regex pattern. Arguments are pattern (regex) and path (absolute file or directory) — not a shell command. "+
+			"Do not pass command or cwd; those belong to nusashell.terminal:exec. "+
+			"output_mode: 'content' (default, matching lines with context), 'files_with_matches' (file paths), 'count' (per-file match counts). "+
+			"Skips .git, hidden entries, common build/dependency dirs, and .gitignore/.ignore patterns by default; pass such a directory as path to search inside it explicitly. "+
+			"The receipt path is the resolved scan root (never '.' for an empty input)."),
+		mcp.WithString("path", mcp.Description("Absolute directory or file to search. Empty uses the Files default root (user home), not a per-conversation workspace.")),
+		mcp.WithString("pattern", mcp.Required(), mcp.Description("Non-empty regular expression. Required. This is not a shell command.")),
 		mcp.WithString("glob", mcp.Description("Optional file name glob filter (e.g. '*.js').")),
 		mcp.WithNumber("before", mcp.Description("Context lines before match (0-10)."), mcp.Min(0.0), mcp.Max(10.0)),
 		mcp.WithNumber("after", mcp.Description("Context lines after match (0-10)."), mcp.Min(0.0), mcp.Max(10.0)),
@@ -190,7 +195,7 @@ func registerTools(s *server.MCPServer, svc *FileService) {
 func contextMapTool() mcp.Tool {
 	return mcp.NewTool("context_map",
 		mcp.WithDescription("Build a token-budgeted markdown map of the repo: stack classification, top files ranked by Personalized PageRank over the symbol reference graph, and elided signatures. Optional role (planner|executor|reviewer) enables role-aware budgeting. Returns { map, stack, ranks, stats } and roleScores when role is set."),
-		mcp.WithString("path", mcp.Description("Absolute directory path to map, or empty for the whole workspace root.")),
+		mcp.WithString("path", mcp.Description("Absolute directory path to map. Empty uses the Files default root (user home), not a per-conversation workspace.")),
 		mcp.WithNumber("budget", mcp.Description("Approximate token budget (default 1024)."), mcp.Min(64.0), mcp.Max(8192.0)),
 		mcp.WithString("activeFile", mcp.Description("Workspace-relative file currently in focus; boosted 50x.")),
 		mcp.WithString("query", mcp.Description("Space-separated symbol-name terms; matching files get a 10x boost.")),
@@ -203,7 +208,7 @@ func contextMapTool() mcp.Tool {
 func detectStackTool() mcp.Tool {
 	return mcp.NewTool("detect_stack",
 		mcp.WithDescription("Classify the workspace from manifest files (package.json, Cargo.toml, pyproject.toml, go.mod, ...): category, languages, manifests, key deps, package.json scripts. Reads manifests only."),
-		mcp.WithString("path", mcp.Description("Absolute directory path to classify, or empty for the workspace root.")),
+		mcp.WithString("path", mcp.Description("Absolute directory path to classify. Empty uses the Files default root (user home), not a per-conversation workspace.")),
 	)
 }
 
@@ -246,7 +251,8 @@ func handleList(svc *FileService) server.ToolHandlerFunc {
 		if err != nil {
 			return errorResult(err.Error()), nil
 		}
-		data := map[string]any{"path": path, "items": items}
+		resolved, _ := resolvePathOrRoot(path, svc.root)
+		data := map[string]any{"path": resolved, "items": items}
 		return textAndJSON(formatFilesToolText("list", data), data)
 	}
 }
@@ -268,7 +274,8 @@ func handleTree(svc *FileService) server.ToolHandlerFunc {
 		if err != nil {
 			return errorResult(err.Error()), nil
 		}
-		data := map[string]any{"path": path, "tree": tree}
+		resolved, _ := resolvePathOrRoot(path, svc.root)
+		data := map[string]any{"path": resolved, "tree": tree}
 		return textAndJSON(formatFilesToolText("tree", data), data)
 	}
 }
@@ -377,8 +384,14 @@ func handleDelete(svc *FileService) server.ToolHandlerFunc {
 func handleSearch(svc *FileService) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
+		if msg := rejectTerminalExecArgs(args, "search"); msg != "" {
+			return errorResult(msg), nil
+		}
 		path, _ := args["path"].(string)
 		pattern, _ := args["pattern"].(string)
+		if strings.TrimSpace(pattern) == "" {
+			return errorResult("pattern is required and must be a non-empty glob. search takes {pattern, path}, not a shell command."), nil
+		}
 		exclude := toStringSlice(args["exclude"])
 		ftype, _ := args["type"].(string)
 		if ftype == "" {
@@ -389,12 +402,13 @@ func handleSearch(svc *FileService) server.ToolHandlerFunc {
 		if err != nil {
 			return errorResult(err.Error()), nil
 		}
-		return jsonResult(map[string]any{
-			"path":    path,
+		data := map[string]any{
+			"path":    result["path"],
 			"pattern": pattern,
 			"results": result["results"],
 			"meta":    result["meta"],
-		})
+		}
+		return textAndJSON(formatFilesToolText("search", data), data)
 	}
 }
 
@@ -412,6 +426,9 @@ func handleInfo(svc *FileService) server.ToolHandlerFunc {
 func handleGrep(svc *FileService) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
+		if msg := rejectTerminalExecArgs(args, "grep"); msg != "" {
+			return errorResult(msg), nil
+		}
 		path, _ := args["path"].(string)
 		pattern, _ := args["pattern"].(string)
 		outputMode, _ := args["output_mode"].(string)
@@ -429,9 +446,10 @@ func handleGrep(svc *FileService) server.ToolHandlerFunc {
 			return errorResult(err.Error()), nil
 		}
 		// Forward the mode-specific keys (results / files / counts) plus
-		// the common meta. The text summary uses the same data map.
+		// the common meta. path is the resolved scan root, never the raw
+		// empty string (which used to render as path=.).
 		data := map[string]any{
-			"path":    path,
+			"path":    result["path"],
 			"pattern": pattern,
 			"meta":    result["meta"],
 		}
@@ -679,6 +697,22 @@ func toBool(v any) bool {
 func getString(args map[string]any, key string) string {
 	if v, ok := args[key].(string); ok {
 		return v
+	}
+	return ""
+}
+
+// terminalExecArgKeys are arguments of nusashell.terminal:exec that agents
+// sometimes send to files grep/search by mistake, which previously ran a
+// home-directory scan with an empty pattern and dumped CA certificates.
+var terminalExecArgKeys = []string{"command", "cwd", "wait", "timeoutMs", "killOnTimeout", "shell"}
+
+func rejectTerminalExecArgs(args map[string]any, tool string) string {
+	for _, k := range terminalExecArgKeys {
+		if _, ok := args[k]; ok {
+			return "nusashell.files:" + tool + " does not accept " + k +
+				". It takes pattern (regex/glob) and path (absolute file or directory), not a shell command. " +
+				"Use nusashell.terminal:exec for {command, cwd}."
+		}
 	}
 	return ""
 }
