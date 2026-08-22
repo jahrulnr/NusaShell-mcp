@@ -128,18 +128,19 @@ func handleExec(pm *ProcessManager) server.ToolHandlerFunc {
 
 func processJSON(p *Process, waitTimedOut, killed, includeOutput bool) (*mcp.CallToolResult, error) {
 	stdout, stderr, truncated, exited, exitCode, signal := p.snapshot(false)
+	exitVal := exitCodeOr(exitCode)
 	data := map[string]any{
 		"processId": p.ID, "command": p.Command, "cwd": p.Cwd,
 		"shell": p.Shell, "shellKind": p.ShellKind,
-		"startedAt": p.StartedAt, "exited": exited, "exitCode": exitCode,
+		"startedAt": p.StartedAt, "exited": exited, "exitCode": exitVal,
 		"signal": signal, "stdout": stripANSI(stdout), "stderr": stripANSI(stderr),
 		"truncated": truncated, "waitTimedOut": waitTimedOut,
 		"timeoutIsNotProcessLifetime": true, "killed": killed,
 	}
-	return textJSON(data, formatProcessText(p.ID, exited, exitCode, waitTimedOut, stdout, stderr, includeOutput))
+	return textJSON(data, formatProcessText(p.ID, exited, exitVal, waitTimedOut, stdout, stderr, includeOutput))
 }
 
-func formatProcessText(id string, exited bool, exitCode *int, waitTimedOut bool, stdout, stderr string, includeOutput bool) string {
+func formatProcessText(id string, exited bool, exitCode any, waitTimedOut bool, stdout, stderr string, includeOutput bool) string {
 	text := fmt.Sprintf("process_id=%s\nexited=%t\nexit_code=%v\nwait_timed_out=%t\n", id, exited, exitCode, waitTimedOut)
 	if includeOutput {
 		text += fmt.Sprintf("stdout:\n%s\nstderr:\n%s\n", stripANSI(stdout), stripANSI(stderr))
@@ -221,17 +222,18 @@ func handleRead(mgr *SessionManager) server.ToolHandlerFunc {
 		}
 
 		exited, exitCode, _, _ := session.state()
+		exitVal := exitCodeOr(exitCode)
 		data := map[string]any{
 			"stdout":       stdoutText,
 			"stderr":       "",
 			"exited":       exited,
-			"exitCode":     exitCode,
+			"exitCode":     exitVal,
 			"truncated":    truncated,
 			"sessionId":    session.ID,
 			"ansiStripped": ansiStripped,
 		}
 		return textJSON(data, formatPtyReadText(map[string]any{
-			"sessionId": session.ID, "exited": exited, "exitCode": exitCode,
+			"sessionId": session.ID, "exited": exited, "exitCode": exitVal,
 			"truncated": truncated, "stdout": stdout, "ansiStripped": ansiStripped,
 		}))
 	}
@@ -281,7 +283,7 @@ func handleList(mgr *SessionManager) server.ToolHandlerFunc {
 			items = append(items, map[string]any{
 				"sessionId": s.ID, "shell": s.Shell, "shellKind": s.ShellKind,
 				"cwd": s.Cwd, "cols": cols, "rows": rows, "createdAt": s.CreatedAt,
-				"exited": exited, "exitCode": exitCode,
+				"exited": exited, "exitCode": exitCodeOr(exitCode),
 			})
 		}
 		return textJSON(map[string]any{"sessions": items, "count": len(items)}, formatListSessionsText(items))
@@ -300,9 +302,10 @@ func handleProcessRead(pm *ProcessManager) server.ToolHandlerFunc {
 			return errorResult(err.Error()), nil
 		}
 		stdout, stderr, truncated, exited, exitCode, signal := p.snapshot(clear)
+		exitVal := exitCodeOr(exitCode)
 		data := map[string]any{"processId": id, "stdout": stripANSI(stdout), "stderr": stripANSI(stderr),
-			"exited": exited, "exitCode": exitCode, "signal": signal, "truncated": truncated}
-		return textJSON(data, fmt.Sprintf("process_id=%s\nexited=%t\nexit_code=%v\nstdout:\n%s\nstderr:\n%s\n", id, exited, exitCode, stripANSI(stdout), stripANSI(stderr)))
+			"exited": exited, "exitCode": exitVal, "signal": signal, "truncated": truncated}
+		return textJSON(data, fmt.Sprintf("process_id=%s\nexited=%t\nexit_code=%v\nstdout:\n%s\nstderr:\n%s\n", id, exited, exitVal, stripANSI(stdout), stripANSI(stderr)))
 	}
 }
 
@@ -341,7 +344,7 @@ func handleProcessList(pm *ProcessManager) server.ToolHandlerFunc {
 			_, _, _, exited, code, signal := p.snapshot(false)
 			out = append(out, map[string]any{"processId": p.ID, "command": p.Command, "cwd": p.Cwd,
 				"shell": p.Shell, "shellKind": p.ShellKind, "startedAt": p.StartedAt,
-				"exited": exited, "exitCode": code, "signal": signal})
+				"exited": exited, "exitCode": exitCodeOr(code), "signal": signal})
 		}
 		return textJSON(map[string]any{"processes": out, "count": len(out)}, "")
 	}

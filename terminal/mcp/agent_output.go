@@ -18,11 +18,17 @@ func headerLines(fields map[string]any) string {
 	seen := map[string]bool{}
 	for _, k := range order {
 		if v, ok := fields[k]; ok {
+			if v == nil {
+				continue
+			}
 			lines = append(lines, fmt.Sprintf("%s=%v", k, v))
 			seen[k] = true
 		}
 	}
 	for k, v := range fields {
+		if v == nil {
+			continue
+		}
 		if !seen[k] {
 			lines = append(lines, fmt.Sprintf("%s=%v", k, v))
 		}

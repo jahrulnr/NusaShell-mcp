@@ -78,14 +78,33 @@ func TestProcessManagerConcurrentAccess(t *testing.T) {
 }
 
 func TestFormatProcessTextIncludesOutputForForegroundWait(t *testing.T) {
-	text := formatProcessText("proc-1", true, intPtr(0), false, "hello", "oops", true)
+	text := formatProcessText("proc-1", true, exitCodeOr(intPtr(0)), false, "hello", "oops", true)
 	if !strings.Contains(text, "stdout:\nhello") || !strings.Contains(text, "stderr:\noops") {
 		t.Fatalf("foreground result omitted command output: %q", text)
 	}
 }
 
+func TestFormatProcessTextPrintsExitCodeAsIntegerNotAddress(t *testing.T) {
+	text := formatProcessText("proc-1", true, exitCodeOr(intPtr(0)), false, "hello", "", true)
+	if !strings.Contains(text, "exit_code=0\n") {
+		t.Fatalf("expected exit_code=0 in text, got %q", text)
+	}
+	code := 42
+	text2 := formatProcessText("proc-2", true, exitCodeOr(&code), false, "out", "", true)
+	if !strings.Contains(text2, "exit_code=42\n") {
+		t.Fatalf("expected exit_code=42 in text, got %q", text2)
+	}
+}
+
+func TestFormatProcessTextNilExitCodeShowsNil(t *testing.T) {
+	text := formatProcessText("proc-1", false, exitCodeOr(nil), false, "", "", false)
+	if !strings.Contains(text, "exit_code=<nil>\n") {
+		t.Fatalf("expected exit_code=<nil> for running process, got %q", text)
+	}
+}
+
 func TestFormatProcessTextOmitsOutputForBackgroundLaunch(t *testing.T) {
-	text := formatProcessText("proc-1", false, nil, false, "background", "", false)
+	text := formatProcessText("proc-1", false, exitCodeOr(nil), false, "background", "", false)
 	if strings.Contains(text, "background") {
 		t.Fatalf("background receipt unexpectedly included process output: %q", text)
 	}
