@@ -1,7 +1,7 @@
 {
   "id": "nusashell.notes",
   "name": "Notes",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "icon": "\ud83d\udcdd",
   "ui": {
     "entry": "ui/index.html",
@@ -21,6 +21,9 @@
     "env": {},
     "autostart": true,
     "keepAliveOnClose": false
+  },
+  "contract": {
+    "entry": "CONTRACT.md"
   },
   "dependencies": {
     "shell": ">=0.0.1"
