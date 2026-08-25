@@ -1,7 +1,7 @@
 {
   "id": "nusashell.kanban",
   "name": "Kanban",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "icon": "file://icon.png",
   "ui": {
     "entry": "ui/index.html",
