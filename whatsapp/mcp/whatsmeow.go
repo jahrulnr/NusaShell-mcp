@@ -59,10 +59,7 @@ func NewWhatsmeowClient(dataDir string, verbose bool) *WhatsmeowClient {
 // are critical: post-pair sync runs parallel prekey/identity/history writes
 // that serialize and surface as SQLITE_BUSY without WAL.
 func (w *WhatsmeowClient) initStore(ctx context.Context) error {
-	// Use forward slashes in the DSN — SQLite URI parsing expects them
-	// regardless of OS (Windows filepath.Join produces backslashes).
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_foreign_keys=on",
-		filepath.ToSlash(filepath.Join(w.dataDir, "session.db")))
+	dsn := sessionDSN(w.dataDir)
 	container, err := sqlstore.New(ctx, "sqlite", dsn, w.log)
 	if err != nil {
 		return fmt.Errorf("open session store: %w", err)
@@ -74,6 +71,18 @@ func (w *WhatsmeowClient) initStore(ctx context.Context) error {
 	w.container = container
 	w.device = device
 	return nil
+}
+
+// sessionDSN builds the SQLite DSN for the whatsmeow session store.
+//
+// modernc.org/sqlite uses _pragma=<name>(<value>) query syntax (NOT
+// mattn/go-sqlite3's _<pragma>=<value>). foreign_keys must be ON or
+// whatsmeow's schema upgrade aborts with "foreign keys are not enabled".
+// Forward slashes are required in the DSN — SQLite URI parsing expects
+// them regardless of OS (Windows filepath.Join produces backslashes).
+func sessionDSN(dataDir string) string {
+	return fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(on)",
+		filepath.ToSlash(filepath.Join(dataDir, "session.db")))
 }
 
 func (w *WhatsmeowClient) newClient() {
