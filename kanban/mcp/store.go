@@ -44,12 +44,12 @@ type Column struct {
 
 // Session is an agent session for filtering board work.
 type Session struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	Color      string `json:"color"`
+	ID         string  `json:"id"`
+	Name       string  `json:"name"`
+	Color      string  `json:"color"`
 	Branch     *string `json:"branch"`
-	IsWorktree bool   `json:"is_worktree"`
-	CreatedAt  string `json:"created_at"`
+	IsWorktree bool    `json:"is_worktree"`
+	CreatedAt  string  `json:"created_at"`
 }
 
 // Ticket is a story or subtask on the board.
@@ -71,9 +71,9 @@ type Ticket struct {
 // TicketWithSubtasks is a ticket with its subtask list and progress.
 type TicketWithSubtasks struct {
 	Ticket
-	Subtasks        []Ticket `json:"subtasks"`
-	SubtaskTotal    int      `json:"subtask_total"`
-	SubtaskCompleted int     `json:"subtask_completed"`
+	Subtasks         []Ticket `json:"subtasks"`
+	SubtaskTotal     int      `json:"subtask_total"`
+	SubtaskCompleted int      `json:"subtask_completed"`
 }
 
 // Store is the JSON-backed Kanban data store.
@@ -179,7 +179,7 @@ func (s *Store) GetOrCreateDefaultProject() Project {
 // --- Columns ---
 
 func (s *Store) GetColumns(projectID string) []Column {
-	var out []Column
+	out := make([]Column, 0)
 	for _, c := range s.data.Columns {
 		if c.ProjectID == projectID {
 			out = append(out, c)
@@ -386,9 +386,9 @@ func (s *Store) GetTicketWithSubtasks(id string) *TicketWithSubtasks {
 	subs := s.GetSubtasks(id)
 	progress := s.GetStoryProgress(id)
 	return &TicketWithSubtasks{
-		Ticket:          *t,
-		Subtasks:        subs,
-		SubtaskTotal:    progress.Total,
+		Ticket:           *t,
+		Subtasks:         subs,
+		SubtaskTotal:     progress.Total,
 		SubtaskCompleted: progress.Completed,
 	}
 }
@@ -402,7 +402,7 @@ type TicketFilters struct {
 }
 
 func (s *Store) ListTickets(filters TicketFilters) []Ticket {
-	var out []Ticket
+	out := make([]Ticket, 0)
 	for _, t := range s.data.Tickets {
 		if filters.ProjectID != "" && t.ProjectID != filters.ProjectID {
 			continue
@@ -501,7 +501,7 @@ func (s *Store) DeleteTicket(id string) bool {
 }
 
 func (s *Store) GetSubtasks(parentTicketID string) []Ticket {
-	var out []Ticket
+	out := make([]Ticket, 0)
 	for _, t := range s.data.Tickets {
 		if t.ParentTicketID != nil && *t.ParentTicketID == parentTicketID {
 			out = append(out, t)

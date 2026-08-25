@@ -26,13 +26,38 @@
   const status = document.getElementById("status");
 
   // --- NusaShell MCP bridge ---
-  // The plugin UI calls MCP tools via the NusaShell bridge API.
-  // In standalone mode (no bridge), it falls back to a status display.
-  function callTool(name, args) {
-    if (window.nusashell && window.nusashell.callTool) {
-      return window.nusashell.callTool(name, args || {});
+  // The plugin UI calls MCP tools via the NusaShell bridge API that the
+  // plugin handler injects as window.shell (see transport/plugin_handler.go
+  // injectShim). The shim signature is callTool(pluginId, toolName, args).
+  // The plugin ID is passed by the host as a ?pluginId= query param; fall
+  // back to this plugin's manifest id when opened standalone.
+  var pluginId = new URLSearchParams(location.search).get("pluginId") ||
+    "nusashell.whatsapp";
+
+  // callTool unwraps the bridge envelope and surfaces tool-level errors
+  // (IsError=true) as rejections so callers' catch paths render the real
+  // message. Mirrors kanban/ui-src/api/client.ts.
+  async function callTool(name, args) {
+    if (!window.shell || !window.shell.callTool) {
+      throw new Error("NusaShell bridge not available");
     }
-    return Promise.reject(new Error("NusaShell bridge not available"));
+    const envelope = await window.shell.callTool(pluginId, name, args || {});
+    // Older bridges returned { requestId, result }; unwrap that too.
+    let payload = envelope;
+    if (payload && typeof payload === "object" && "result" in payload) {
+      payload = payload.result;
+    }
+    // Tool-level errors: throw the content text so the UI shows it.
+    if (payload && typeof payload === "object" && "isError" in payload) {
+      if (payload.isError) {
+        const text = (payload.content || [])
+          .map(function (c) { return c && c.text; })
+          .filter(Boolean)
+          .join("\n");
+        throw new Error(text || "Tool " + name + " failed");
+      }
+    }
+    return payload;
   }
 
   function setStatus(msg, isError) {
@@ -289,20 +314,30 @@
   }
 
   // --- Helpers ---
+  // parseResult extracts the tool payload from the bridge result.
+  // Prioritizes structuredContent (native object) over the JSON text in
+  // content[0].text, matching kanban/notes. Falls back to content text,
+  // then the raw envelope.
   function parseResult(result) {
-    if (result && result.content && result.content[0] && result.content[0].text) {
+    if (result == null) return result;
+    // structuredContent is the native object the server set (helpers.go
+    // jsonResult sets both Content and StructuredContent to the same data).
+    if (result.structuredContent != null) return result.structuredContent;
+    // Fall back to parsing the text content part.
+    if (result.content && result.content[0] && result.content[0].text) {
       try {
         return JSON.parse(result.content[0].text);
       } catch (e) {
         return null;
       }
     }
-    if (result && result.structuredContent) return result.structuredContent;
     return result;
   }
 
   function escapeHtml(s) {
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
   }
 
   function formatTime(unix) {
@@ -319,6 +354,9 @@
   // --- Init ---
   getQrBtn.addEventListener("click", getQrCode);
   refreshQrBtn.addEventListener("click", getQrCode);
+
+  // Stop the pairing poll when the window closes so we don't leak a timer.
+  window.addEventListener("beforeunload", stopPairingPoll);
 
   // Check initial status.
   async function init() {

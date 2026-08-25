@@ -1,4 +1,4 @@
-const pluginId = new URLSearchParams(location.search).get("pluginId") || "";
+const pluginId = new URLSearchParams(location.search).get("pluginId") || "nusashell.notes";
 const statusEl = document.getElementById("status");
 const contentEl = document.getElementById("content");
 const sidebarEl = document.getElementById("sidebar");

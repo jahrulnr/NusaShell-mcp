@@ -43,6 +43,18 @@ export async function callTool<T>(name: string, args: Record<string, unknown> = 
     const sc = (payload as PluginToolResult).structuredContent;
     if (sc !== null && sc !== undefined) {
       payload = sc;
+    } else {
+      // structuredContent was null (server returned a nil slice / nil value).
+      // Fall back to parsing the text content so callers still get the real
+      // value (e.g. [] for an empty list) instead of the whole envelope,
+      // which would crash array consumers with "X is not iterable".
+      const text = (payload as PluginToolResult).content
+        ?.map((c) => c?.text)
+        .filter(Boolean)
+        .join("\n");
+      if (typeof text === "string") {
+        try { payload = JSON.parse(text); } catch { /* keep envelope */ }
+      }
     }
   }
 
