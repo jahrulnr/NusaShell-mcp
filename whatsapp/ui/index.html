@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WhatsApp</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Login view (shown when not paired) -->
+    <div id="loginView" class="view">
+      <div class="login-panel">
+        <div class="login-header">
+          <span class="login-icon">💬</span>
+          <h2>Link WhatsApp</h2>
+        </div>
+        <p class="login-desc">
+          Scan the QR code with your phone to link your WhatsApp account.
+        </p>
+        <div id="qrContainer" class="qr-container">
+          <div class="qr-placeholder">Click "Get QR Code" to start</div>
+        </div>
+        <div class="login-actions">
+          <button id="getQrBtn" class="btn-primary">Get QR Code</button>
+          <button id="refreshQrBtn" class="btn-secondary" style="display:none">Refresh QR</button>
+        </div>
+        <div id="loginStatus" class="login-status"></div>
+      </div>
+    </div>
+
+    <!-- Main view (shown when paired) -->
+    <div id="mainView" class="view" style="display:none">
+      <div id="sidebar">
+        <div class="sidebar-header">
+          <input id="searchInput" type="text" placeholder="Search chats..." />
+        </div>
+        <div id="chatList" class="chat-list"></div>
+      </div>
+      <div id="main">
+        <div id="chatHeader" class="chat-header">
+          <span id="chatName" class="chat-name">Select a chat</span>
+          <span id="chatKind" class="chat-kind"></span>
+        </div>
+        <div id="messageList" class="message-list"></div>
+        <div id="status"></div>
+      </div>
+    </div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

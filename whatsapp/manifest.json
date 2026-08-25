@@ -1,0 +1,50 @@
+{
+  "id": "nusashell.whatsapp",
+  "name": "WhatsApp",
+  "version": "0.1.0",
+  "icon": "\ud83d\udcac",
+  "ui": {
+    "entry": "ui/index.html",
+    "window": {
+      "mode": "panel",
+      "defaultSize": {
+        "width": 520,
+        "height": 640
+      },
+      "resizable": true
+    }
+  },
+  "mcp": {
+    "transport": "stdio",
+    "command": "mcp/server",
+    "args": [],
+    "env": {},
+    "autostart": false,
+    "keepAliveOnClose": true
+  },
+  "automation": {
+    "emits": [
+      {
+        "type": "whatsapp.message_received",
+        "description": "A new inbound WhatsApp message was received and stored",
+        "payloadSchema": {
+          "type": "object",
+          "properties": {
+            "chat_jid": { "type": "string" },
+            "message_id": { "type": "string" },
+            "sender_jid": { "type": "string" },
+            "from_me": { "type": "boolean" }
+          },
+          "required": ["chat_jid", "message_id", "sender_jid", "from_me"]
+        }
+      }
+    ]
+  },
+  "contract": {
+    "entry": "CONTRACT.md"
+  },
+  "dependencies": {
+    "shell": ">=0.1.0"
+  },
+  "category": "Communication"
+}
