@@ -1,9 +1,6 @@
-# NusaShell MCP Plugins (v2 — Go)
+# NusaShell MCP Plugins
 
 First-party MCP plugins for [NusaShell](https://github.com/jahrulnr/NusaShell).
-
-> **v2 branch:** All MCP servers are written in Go. The legacy Node.js/TypeScript
-> implementation lives on the `master` branch.
 
 Each plugin is a self-contained folder:
 
@@ -16,10 +13,8 @@ manifest.json + ui/ + mcp/      # plugin with a window (UI + MCP)
 
 | Plugin | Description |
 | --- | --- |
-| `files/` | File browser and filesystem MCP tools |
 | `kanban/` | Kanban board with project/column/ticket management |
 | `notes/` | Simple notes app |
-| `terminal/` | Terminal emulator with shell execution MCP tools |
 
 ## Architecture
 
@@ -27,19 +22,11 @@ manifest.json + ui/ + mcp/      # plugin with a window (UI + MCP)
 mcpkit/              # shared Go module (config, stdio transport, data-file resolution)
 notes/mcp/           # notes MCP server (Go)
 kanban/mcp/          # kanban MCP server (Go)
-files/mcp/           # files MCP server (Go)
-terminal/mcp/        # terminal MCP server (Go)
 ```
 
 Each plugin's `mcp/` folder is an independent Go module that depends on
 `mcpkit` via a `replace` directive. The MCP protocol is implemented with
 [`mark3labs/mcp-go`](https://github.com/mark3labs/mcp-go).
-
-## Usage
-
-These plugins are consumed by NusaShell as a git submodule at `plugins/`.
-The shell passes `NUSASHELL_USER_DATA` to each plugin process; plugins manage
-their own durable data under `{NUSASHELL_USER_DATA}/plugins-data/{pluginId}/`.
 
 ## Build
 
@@ -49,8 +36,6 @@ folder:
 ```bash
 cd notes/mcp && go build -o server .
 cd kanban/mcp && go build -o server .
-cd files/mcp && go build -o server .
-cd terminal/mcp && go build -o server .
 ```
 
 The resulting `mcp/server` binary is what `manifest.json` launches
@@ -59,7 +44,7 @@ The resulting `mcp/server` binary is what `manifest.json` launches
 ### Build all
 
 ```bash
-for p in notes kanban files terminal; do
+for p in notes kanban; do
   (cd "$p/mcp" && go build -o server .)
 done
 ```
@@ -69,8 +54,6 @@ done
 ```bash
 cd notes/mcp && go test ./...
 cd kanban/mcp && go test ./...
-cd files/mcp && go test ./...
-cd terminal/mcp && go test ./...
 ```
 
 ## Smoke test
