@@ -35,7 +35,8 @@ func TestTextOf_Nil(t *testing.T) {
 }
 
 func TestTextOf_Conversation(t *testing.T) {
-	msg := &waE2E.Message{Conversation: new("hello world")}
+	hello := "hello world"
+	msg := &waE2E.Message{Conversation: &hello}
 	got := textOf(msg)
 	if got != "hello world" {
 		t.Errorf("textOf(Conversation) = %q, want %q", got, "hello world")
@@ -45,7 +46,7 @@ func TestTextOf_Conversation(t *testing.T) {
 func TestTextOf_ExtendedText(t *testing.T) {
 	msg := &waE2E.Message{
 		ExtendedTextMessage: &waE2E.ExtendedTextMessage{
-			Text: new("extended message"),
+			Text: func() *string { s := "extended message"; return &s }(),
 		},
 	}
 	got := textOf(msg)
@@ -74,7 +75,7 @@ func TestExtractQuotedID_Nil(t *testing.T) {
 func TestExtractQuotedID_NoContext(t *testing.T) {
 	msg := &waE2E.Message{
 		ExtendedTextMessage: &waE2E.ExtendedTextMessage{
-			Text: new("no reply"),
+			Text: func() *string { s := "no reply"; return &s }(),
 		},
 	}
 	got := extractQuotedID(msg)
@@ -86,9 +87,9 @@ func TestExtractQuotedID_NoContext(t *testing.T) {
 func TestExtractQuotedID_WithStanzaID(t *testing.T) {
 	msg := &waE2E.Message{
 		ExtendedTextMessage: &waE2E.ExtendedTextMessage{
-			Text: new("my reply"),
+			Text: func() *string { s := "my reply"; return &s }(),
 			ContextInfo: &waE2E.ContextInfo{
-				StanzaID: new("QUOTED123"),
+				StanzaID: func() *string { s := "QUOTED123"; return &s }(),
 			},
 		},
 	}
@@ -99,7 +100,7 @@ func TestExtractQuotedID_WithStanzaID(t *testing.T) {
 }
 
 func TestExtractQuotedID_ConversationHasNoQuote(t *testing.T) {
-	msg := &waE2E.Message{Conversation: new("plain")}
+	msg := &waE2E.Message{Conversation: func() *string { s := "plain"; return &s }()}
 	got := extractQuotedID(msg)
 	if got != "" {
 		t.Errorf("extractQuotedID(Conversation) = %q, want empty", got)
@@ -111,8 +112,8 @@ func TestExtractQuotedID_ConversationHasNoQuote(t *testing.T) {
 func TestExtractMediaInfo_ImageCaption(t *testing.T) {
 	msg := &waE2E.Message{
 		ImageMessage: &waE2E.ImageMessage{
-			Caption:  new("look at this photo"),
-			Mimetype: new("image/jpeg"),
+			Caption:  func() *string { s := "look at this photo"; return &s }(),
+			Mimetype: func() *string { s := "image/jpeg"; return &s }(),
 		},
 	}
 	kind, mime, caption := extractMediaInfo(msg)
@@ -130,8 +131,8 @@ func TestExtractMediaInfo_ImageCaption(t *testing.T) {
 func TestExtractMediaInfo_VideoCaption(t *testing.T) {
 	msg := &waE2E.Message{
 		VideoMessage: &waE2E.VideoMessage{
-			Caption:  new("cool video"),
-			Mimetype: new("video/mp4"),
+			Caption:  func() *string { s := "cool video"; return &s }(),
+			Mimetype: func() *string { s := "video/mp4"; return &s }(),
 		},
 	}
 	kind, _, caption := extractMediaInfo(msg)
@@ -146,8 +147,8 @@ func TestExtractMediaInfo_VideoCaption(t *testing.T) {
 func TestExtractMediaInfo_DocumentCaption(t *testing.T) {
 	msg := &waE2E.Message{
 		DocumentMessage: &waE2E.DocumentMessage{
-			Caption:  new("see this document"),
-			Mimetype: new("application/pdf"),
+			Caption:  func() *string { s := "see this document"; return &s }(),
+			Mimetype: func() *string { s := "application/pdf"; return &s }(),
 		},
 	}
 	kind, _, caption := extractMediaInfo(msg)
@@ -162,7 +163,7 @@ func TestExtractMediaInfo_DocumentCaption(t *testing.T) {
 func TestExtractMediaInfo_AudioVoice(t *testing.T) {
 	msg := &waE2E.Message{
 		AudioMessage: &waE2E.AudioMessage{
-			Mimetype: new("audio/ogg"),
+			Mimetype: func() *string { s := "audio/ogg"; return &s }(),
 			PTT:      new(true),
 		},
 	}
@@ -178,7 +179,7 @@ func TestExtractMediaInfo_AudioVoice(t *testing.T) {
 func TestExtractMediaInfo_AudioNotVoice(t *testing.T) {
 	msg := &waE2E.Message{
 		AudioMessage: &waE2E.AudioMessage{
-			Mimetype: new("audio/mpeg"),
+			Mimetype: func() *string { s := "audio/mpeg"; return &s }(),
 		},
 	}
 	kind, _, _ := extractMediaInfo(msg)
@@ -190,7 +191,7 @@ func TestExtractMediaInfo_AudioNotVoice(t *testing.T) {
 func TestExtractMediaInfo_Sticker(t *testing.T) {
 	msg := &waE2E.Message{
 		StickerMessage: &waE2E.StickerMessage{
-			Mimetype: new("image/webp"),
+			Mimetype: func() *string { s := "image/webp"; return &s }(),
 		},
 	}
 	kind, _, _ := extractMediaInfo(msg)
@@ -200,7 +201,7 @@ func TestExtractMediaInfo_Sticker(t *testing.T) {
 }
 
 func TestExtractMediaInfo_NoMedia(t *testing.T) {
-	msg := &waE2E.Message{Conversation: new("just text")}
+	msg := &waE2E.Message{Conversation: func() *string { s := "just text"; return &s }()}
 	kind, mime, caption := extractMediaInfo(msg)
 	if kind != "" || mime != "" || caption != "" {
 		t.Errorf("extractMediaInfo(text) = (%q,%q,%q), want all empty", kind, mime, caption)
@@ -310,9 +311,9 @@ func TestTranslateMessage_QuoteSetsQuotedID(t *testing.T) {
 	evt := makeTextEvt(t, "my reply", "", false)
 	evt.Message = &waE2E.Message{
 		ExtendedTextMessage: &waE2E.ExtendedTextMessage{
-			Text: new("my reply"),
+			Text: func() *string { s := "my reply"; return &s }(),
 			ContextInfo: &waE2E.ContextInfo{
-				StanzaID: new("ORIG42"),
+				StanzaID: func() *string { s := "ORIG42"; return &s }(),
 			},
 		},
 	}
@@ -336,8 +337,8 @@ func TestTranslateMessage_ImageMedia(t *testing.T) {
 	evt := makeTextEvt(t, "", "", false)
 	evt.Message = &waE2E.Message{
 		ImageMessage: &waE2E.ImageMessage{
-			Caption:    new("a photo"),
-			Mimetype:   new("image/jpeg"),
+			Caption:    func() *string { s := "a photo"; return &s }(),
+			Mimetype:   func() *string { s := "image/jpeg"; return &s }(),
 			FileLength: new(uint64(1234)),
 		},
 	}
@@ -367,8 +368,8 @@ func TestTranslateMessage_Reaction(t *testing.T) {
 	evt := makeTextEvt(t, "", "", false)
 	evt.Message = &waE2E.Message{
 		ReactionMessage: &waE2E.ReactionMessage{
-			Key:  &waCommon.MessageKey{ID: new("TARGET9")},
-			Text: new("👍"),
+			Key:  &waCommon.MessageKey{ID: func() *string { s := "TARGET9"; return &s }()},
+			Text: func() *string { s := "👍"; return &s }(),
 		},
 	}
 	w.translateMessage(evt)
@@ -395,9 +396,9 @@ func TestTranslateMessage_Edit(t *testing.T) {
 	evt.Message = &waE2E.Message{
 		ProtocolMessage: &waE2E.ProtocolMessage{
 			Type: waE2E.ProtocolMessage_MESSAGE_EDIT.Enum(),
-			Key:  &waCommon.MessageKey{ID: new("TARGET9")},
+			Key:  &waCommon.MessageKey{ID: func() *string { s := "TARGET9"; return &s }()},
 			EditedMessage: &waE2E.Message{
-				Conversation: new("edited text"),
+				Conversation: func() *string { s := "edited text"; return &s }(),
 			},
 		},
 	}
@@ -425,7 +426,7 @@ func TestTranslateMessage_Revoke(t *testing.T) {
 	evt.Message = &waE2E.Message{
 		ProtocolMessage: &waE2E.ProtocolMessage{
 			Type: waE2E.ProtocolMessage_REVOKE.Enum(),
-			Key:  &waCommon.MessageKey{ID: new("TARGET9")},
+			Key:  &waCommon.MessageKey{ID: func() *string { s := "TARGET9"; return &s }()},
 		},
 	}
 	w.translateMessage(evt)

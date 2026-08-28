@@ -23,6 +23,7 @@ import (
 
 func TestLoggedOutEventResetsStateAndDeletesDevice(t *testing.T) {
 	_, container := newAuthTestDB(t)
+	defer container.Close()
 	saveWhatsAppTestDevice(t, container, "15551112222")
 	w := wireTestClient(t, container)
 	w.newClient()
@@ -84,6 +85,7 @@ func TestLoggedOutEventResetsStateAndDeletesDevice(t *testing.T) {
 
 func TestLoggedOutFromUnpairedStateIsNoop(t *testing.T) {
 	_, container := newAuthTestDB(t)
+	defer container.Close()
 	w := wireTestClient(t, container)
 	// No device saved — LoggedOut during an unpaired attempt must not panic.
 	w.handleEvent(&events.LoggedOut{OnConnect: true, Reason: 401})
@@ -124,6 +126,7 @@ func webMessageInfo(id, text, remoteJID, participant string, fromMe bool) *waWeb
 
 func TestHistorySyncTranslatesConversationsToEvents(t *testing.T) {
 	_, container := newAuthTestDB(t)
+	defer container.Close()
 	w := wireTestClient(t, container)
 	// A client is required to call ParseWebMessage. Build one without
 	// calling Connect (no network).
@@ -173,6 +176,7 @@ func TestHistorySyncTranslatesConversationsToEvents(t *testing.T) {
 
 func TestHistorySyncEmitsPushnamesAsContactEvents(t *testing.T) {
 	_, container := newAuthTestDB(t)
+	defer container.Close()
 	w := wireTestClient(t, container)
 	w.newClient()
 
@@ -207,6 +211,7 @@ func TestHistorySyncEmitsPushnamesAsContactEvents(t *testing.T) {
 
 func TestHistorySyncSkipsConversationsWithBadJID(t *testing.T) {
 	_, container := newAuthTestDB(t)
+	defer container.Close()
 	w := wireTestClient(t, container)
 	w.newClient()
 
@@ -240,6 +245,7 @@ func TestHistorySyncSkipsConversationsWithBadJID(t *testing.T) {
 
 func TestHistorySyncNilDataIsNoop(t *testing.T) {
 	_, container := newAuthTestDB(t)
+	defer container.Close()
 	w := wireTestClient(t, container)
 	w.handleEvent(&events.HistorySync{Data: nil})
 	// No events, no panic.
@@ -254,6 +260,7 @@ func TestHistorySyncNilDataIsNoop(t *testing.T) {
 
 func TestTranslateMessageNormalizesLIDSenderToPhoneJID(t *testing.T) {
 	_, container := newAuthTestDB(t)
+	defer container.Close()
 	w := wireTestClient(t, container)
 
 	phone := types.NewJID("15550000055", types.DefaultUserServer)
@@ -303,6 +310,7 @@ func TestTranslateMessageNormalizesLIDSenderToPhoneJID(t *testing.T) {
 
 func TestTranslateMessagePreservesPhoneSenderJID(t *testing.T) {
 	_, container := newAuthTestDB(t)
+	defer container.Close()
 	w := wireTestClient(t, container)
 
 	phone := types.NewJID("15550000066", types.DefaultUserServer)

@@ -89,6 +89,16 @@ func sessionDSN(dataDir string) string {
 		filepath.ToSlash(filepath.Join(dataDir, "session.db")))
 }
 
+// Close closes the whatsmeow session database connection. Call this in
+// tests to release the SQLite file lock so t.TempDir() cleanup can
+// remove the directory on Windows.
+func (w *WhatsmeowClient) Close() error {
+	if w.container != nil {
+		return w.container.Close()
+	}
+	return nil
+}
+
 func (w *WhatsmeowClient) newClient() {
 	w.client = whatsmeow.NewClient(w.device, w.log)
 	w.client.AddEventHandler(w.handleEvent)

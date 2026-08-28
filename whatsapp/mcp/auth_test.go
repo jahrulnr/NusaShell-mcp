@@ -79,6 +79,7 @@ func wireTestClient(t *testing.T, container *sqlstore.Container) *WhatsmeowClien
 
 func TestInitStoreCreatesFreshUnpairedDevice(t *testing.T) {
 	w := NewWhatsmeowClient(t.TempDir(), false)
+	defer w.Close()
 	if err := w.initStore(context.Background()); err != nil {
 		t.Fatalf("initStore() error = %v", err)
 	}
@@ -108,6 +109,7 @@ func TestInitStoreLoadsExistingPairedDevice(t *testing.T) {
 	_ = db.Close()
 
 	w := NewWhatsmeowClient(dir, false)
+	defer w.Close()
 	if err := w.initStore(context.Background()); err != nil {
 		t.Fatalf("initStore() error = %v", err)
 	}
@@ -123,6 +125,7 @@ func TestInitStoreLoadsExistingPairedDevice(t *testing.T) {
 
 func TestConnectUnpairedReturnsErrNotPaired(t *testing.T) {
 	w := NewWhatsmeowClient(t.TempDir(), false)
+	defer w.Close()
 	err := w.Connect(context.Background())
 	if !errors.Is(err, ErrNotPaired) {
 		t.Fatalf("Connect() error = %v, want ErrNotPaired", err)
@@ -136,6 +139,7 @@ func TestConnectUnpairedReturnsErrNotPaired(t *testing.T) {
 
 func TestNewClientWiresPairedDeviceAndAutoReconnect(t *testing.T) {
 	_, container := newAuthTestDB(t)
+	defer container.Close()
 	jid := saveWhatsAppTestDevice(t, container, "15550000002")
 
 	w := wireTestClient(t, container)
@@ -159,6 +163,7 @@ func TestNewClientWiresPairedDeviceAndAutoReconnect(t *testing.T) {
 
 func TestDeviceDeleteForcesFreshPairing(t *testing.T) {
 	_, container := newAuthTestDB(t)
+	defer container.Close()
 	saveWhatsAppTestDevice(t, container, "15557654321")
 
 	w := wireTestClient(t, container)
@@ -221,6 +226,7 @@ func TestStateTransitionsOnPairAndDisconnect(t *testing.T) {
 
 func TestLogoutResetsPairState(t *testing.T) {
 	w := NewWhatsmeowClient(t.TempDir(), false)
+	defer w.Close()
 
 	// Pre-populate state as if paired and connected.
 	w.mu.Lock()
