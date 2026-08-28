@@ -26,6 +26,7 @@ func TestLoggedOutEventResetsStateAndDeletesDevice(t *testing.T) {
 	defer container.Close()
 	saveWhatsAppTestDevice(t, container, "15551112222")
 	w := wireTestClient(t, container)
+	defer w.Close()
 	w.newClient()
 
 	// Simulate "previously connected and paired".

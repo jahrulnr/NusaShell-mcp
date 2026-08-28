@@ -72,6 +72,11 @@ func (w *WhatsmeowClient) initStore(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("get device: %w", err)
 	}
+	// Close any previously opened container to release the SQLite
+	// file lock (necessary on Windows for t.TempDir() cleanup).
+	if w.container != nil {
+		w.container.Close()
+	}
 	w.container = container
 	w.device = device
 	return nil
