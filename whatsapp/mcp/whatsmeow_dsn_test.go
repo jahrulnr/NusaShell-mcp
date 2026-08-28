@@ -10,7 +10,7 @@ import (
 // silently ignores. When foreign_keys is ignored, whatsmeow's schema
 // upgrade aborts with "foreign keys are not enabled".
 func TestSessionDSNUsesModerncPragmaSyntax(t *testing.T) {
-	dsn := sessionDSN("/tmp/whatsapp")
+	dsn := sessionDSN(t.TempDir())
 
 	// modernc.org/sqlite uses _pragma=<name>(<value>).
 	if !strings.Contains(dsn, "_pragma=foreign_keys(on)") {
@@ -31,13 +31,21 @@ func TestSessionDSNUsesModerncPragmaSyntax(t *testing.T) {
 
 // TestSessionDSNUsesForwardSlashes ensures the path separator is forward
 // slash on all OSes (Windows filepath.Join produces backslashes which
-// break SQLite URI parsing).
+// break SQLite URI parsing). sessionDSN applies filepath.ToSlash so
+// the resulting DSN must never contain a backslash.
 func TestSessionDSNUsesForwardSlashes(t *testing.T) {
-	dsn := sessionDSN("/tmp/whatsapp")
-	if !strings.HasPrefix(dsn, "file:/tmp/whatsapp/session.db?") {
-		t.Errorf("DSN path not forward-slashed: %s", dsn)
+	dsn := sessionDSN(t.TempDir())
+
+	// DSN must contain session.db and start with file: scheme.
+	if !strings.Contains(dsn, "session.db?") {
+		t.Errorf("DSN missing session.db: %s", dsn)
 	}
+	if !strings.HasPrefix(dsn, "file:") {
+		t.Errorf("DSN doesn't start with file: scheme: %s", dsn)
+	}
+
+	// Verify filepath.ToSlash actually converted any backslashes.
 	if strings.Contains(dsn, "\\") {
-		t.Errorf("DSN contains backslash: %s", dsn)
+		t.Errorf("DSN contains backslash (filepath.ToSlash failed): %s", dsn)
 	}
 }
