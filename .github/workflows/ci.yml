@@ -111,6 +111,7 @@ jobs:
   release:
     name: Release ${{ matrix.plugin }}
     needs: [detect, test]
+    continue-on-error: true
     if: github.event_name == 'push' && github.ref == 'refs/heads/master' && needs.detect.outputs.has-changes == 'true'
     runs-on: ubuntu-latest
     strategy:
@@ -175,7 +176,7 @@ jobs:
 
   publish-versions:
     name: Update versions.json
-    needs: [detect, release]
+    needs: [detect]
     if: github.event_name == 'push' && github.ref == 'refs/heads/master' && needs.detect.outputs.has-changes == 'true'
     runs-on: ubuntu-latest
 
