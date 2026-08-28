@@ -70,7 +70,7 @@ func main() {
 	}()
 
 	// Build and register the MCP server.
-	s := server.NewMCPServer("nusashell-whatsapp", "0.1.0",
+	s := server.NewMCPServer("nusashell-whatsapp", "0.1.3",
 		server.WithToolCapabilities(true),
 		server.WithPromptCapabilities(false),
 		server.WithResourceCapabilities(false, false),

@@ -58,6 +58,9 @@ func (in *Ingester) handle(ctx context.Context, ev any) {
 		in.handleContact(ctx, e)
 	case EventGroupInfo:
 		in.handleGroupInfo(ctx, e)
+	case EventLoggedOut:
+		// Boundary event — nothing to mirror. The store is left intact so
+		// history survives a re-link; State() reports unpaired.
 	}
 }
 

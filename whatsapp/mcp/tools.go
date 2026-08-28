@@ -94,7 +94,7 @@ func registerTools(s *server.MCPServer, cli Client, store *Store, ingester *Inge
 	), handleListGroups(store))
 
 	s.AddTool(mcp.NewTool(toolSendMessage,
-		mcp.WithDescription("Send a text message to a WhatsApp chat. Use reply_to_id to quote a specific message. Confirm the chat_jid and content before sending — this delivers a real message to a real person."),
+		mcp.WithDescription("Send a text message to a WhatsApp chat. Markdown is converted to WhatsApp formatting (**bold** → *bold*, ~~strike~~ → ~strike~, lists, blockquotes). Text longer than 4096 chars is split into multiple messages. Use reply_to_id to quote a specific message — the quote attaches to the first chunk. Confirm the chat_jid and content before sending — this delivers a real message to a real person."),
 		mcp.WithString("chat_jid",
 			mcp.Required(),
 			mcp.Description("Target chat JID (obtain from list_chats, list_contacts, or list_groups)."),
@@ -110,7 +110,7 @@ func registerTools(s *server.MCPServer, cli Client, store *Store, ingester *Inge
 	), handleSendMessage(cli, store))
 
 	s.AddTool(mcp.NewTool(toolSendMedia,
-		mcp.WithDescription("Send a file from disk as a WhatsApp attachment. Kind is inferred from MIME type or filename if omitted. Images appear as photos, videos play inline, audio sends as voice, other files arrive as documents."),
+		mcp.WithDescription("Send a file from disk as a WhatsApp attachment. Kind is inferred from MIME type or filename if omitted. Images appear as photos, videos play inline, audio sends as voice, other files arrive as documents. Caption markdown is converted to WhatsApp formatting."),
 		mcp.WithString("chat_jid",
 			mcp.Required(),
 			mcp.Description("Target chat JID."),
@@ -212,7 +212,7 @@ func registerTools(s *server.MCPServer, cli Client, store *Store, ingester *Inge
 	), handleDownloadMedia(cli, store))
 
 	s.AddTool(mcp.NewTool(toolRequestSync,
-		mcp.WithDescription("Ask WhatsApp to backfill history for a specific chat. Use when messages are missing after a reconnect or for an older conversation. Recovery depends on WhatsApp's server-side retention."),
+		mcp.WithDescription("Ask WhatsApp to backfill older messages for a specific chat by sending an on-demand history-sync request to your phone. Use when earlier messages are missing. The response arrives asynchronously as history sync data — check get_messages after a few seconds. Recovery depends on WhatsApp's server-side retention."),
 		mcp.WithString("chat_jid",
 			mcp.Required(),
 			mcp.Description("Chat JID to backfill."),

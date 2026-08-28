@@ -92,3 +92,11 @@ type EventGroupParticipant struct {
 	IsAdmin  bool
 	JoinedAt time.Time
 }
+
+// EventLoggedOut is a boundary event emitted when WhatsApp unlinks this
+// device (session rotation or manual removal from Linked Devices). The
+// ingester does not write anything for it — it exists so tool callers and
+// the UI can surface "re-link required" without polling State().
+type EventLoggedOut struct {
+	Reason string
+}

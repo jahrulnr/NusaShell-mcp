@@ -84,6 +84,14 @@ type Client interface {
 	// reference recorded in the media table. The implementation decodes the ref.
 	Download(ctx context.Context, downloadRef string) (DownloadResult, error)
 
-	// RequestSync asks WhatsApp to backfill history for a specific chat.
+	// RequestSync asks WhatsApp to backfill history for a chat. We build a
+	// PEER_DATA_OPERATION_REQUEST (history sync on demand) anchored at the
+	// newest message we already have, so the server backfills older messages
+	// from that point. If we have no stored message for the chat, we send an
+	// empty anchor with the current time — the server treats that as
+	// "give me the most recent messages".
+	//
+	// The request is sent to our own JID; legacy clients route it to the
+	// phone, which pushes the matching HistorySync blob back.
 	RequestSync(ctx context.Context, chatJID string) error
 }

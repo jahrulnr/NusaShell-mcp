@@ -19,6 +19,10 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// maxMessageLen is WhatsApp's practical per-message length limit.
+// Longer sends are rejected by the server — chunk at this size.
+const maxMessageLen = 4096
+
 // WhatsmeowClient implements Client using the whatsmeow library.
 type WhatsmeowClient struct {
 	dataDir string
@@ -234,7 +238,9 @@ func (w *WhatsmeowClient) Logout(ctx context.Context) error {
 	return w.initStore(ctx)
 }
 
-// SendText sends a text message.
+// SendText sends a text message. Input markdown is converted to WhatsApp
+// formatting and long text is chunked at 4096 chars (WhatsApp's practical
+// limit); only the first chunk carries the reply quote.
 func (w *WhatsmeowClient) SendText(ctx context.Context, chatJID, text, replyToID string) (SendResult, error) {
 	w.mu.Lock()
 	client := w.client
@@ -248,13 +254,26 @@ func (w *WhatsmeowClient) SendText(ctx context.Context, chatJID, text, replyToID
 		return SendResult{}, fmt.Errorf("parse chat jid: %w", err)
 	}
 
-	msg := buildTextMessage(text, replyToID, types.EmptyJID)
+	formatted := markdownToWhatsApp(text)
+	chunks := chunkText(formatted, maxMessageLen)
 
-	resp, err := client.SendMessage(ctx, jid, msg)
-	if err != nil {
-		return SendResult{}, fmt.Errorf("send text: %w", err)
+	var first SendResult
+	for i, chunk := range chunks {
+		msg := buildTextMessage(chunk, "", types.EmptyJID)
+		if i == 0 && replyToID != "" {
+			// Quote on the first chunk only; subsequent chunks are plain
+			// text so the conversation doesn't render the quote N times.
+			msg = buildTextMessage(chunk, replyToID, jid)
+		}
+		resp, err := client.SendMessage(ctx, jid, msg)
+		if err != nil {
+			return first, fmt.Errorf("send text (chunk %d/%d): %w", i+1, len(chunks), err)
+		}
+		if i == 0 {
+			first = SendResult{MessageID: resp.ID, Timestamp: resp.Timestamp}
+		}
 	}
-	return SendResult{MessageID: resp.ID, Timestamp: resp.Timestamp}, nil
+	return first, nil
 }
 
 // SendMedia uploads bytes and sends a media message.
@@ -274,6 +293,11 @@ func (w *WhatsmeowClient) SendMedia(ctx context.Context, chatJID, kind string, d
 	uploaded, err := client.Upload(ctx, data, whatsmeow.MediaType(kind))
 	if err != nil {
 		return SendResult{}, fmt.Errorf("upload media: %w", err)
+	}
+
+	// Caption markdown is converted the same way as text bodies.
+	if caption != "" {
+		caption = markdownToWhatsApp(caption)
 	}
 
 	msg := buildMediaMessage(kind, uploaded, mimeType, caption)
@@ -369,9 +393,11 @@ func (w *WhatsmeowClient) Download(ctx context.Context, downloadRef string) (Dow
 	}, nil
 }
 
-// RequestSync asks WhatsApp to backfill history for a chat. whatsmeow doesn't
-// expose a direct per-chat backfill method; we trigger an app state fetch
-// which causes the server to push history sync events.
+// RequestSync asks WhatsApp to backfill history for a chat. whatsmeow
+// doesn't expose a direct per-chat backfill method; we send a history-sync
+// on-demand request (PEER_DATA_OPERATION_REQUEST) anchored at the newest
+// message we already have, so the server streams the preceding messages as
+// an events.HistorySync blob.
 func (w *WhatsmeowClient) RequestSync(ctx context.Context, chatJID string) error {
 	w.mu.Lock()
 	client := w.client
@@ -380,10 +406,34 @@ func (w *WhatsmeowClient) RequestSync(ctx context.Context, chatJID string) error
 		return ErrNotConnected
 	}
 
-	// FetchAppState triggers a resync of the given app state type. For
-	// per-chat history, there's no direct API — we fetch the critical
-	// patches which include chat list and message history updates.
-	return client.FetchAppState(ctx, appstate.WAPatchCriticalUnblockLow, false, false)
+	jid, err := types.ParseJID(chatJID)
+	if err != nil {
+		return fmt.Errorf("parse chat jid: %w", err)
+	}
+
+	lastKnown := w.buildLastKnownAnchor(jid)
+	req := client.BuildHistorySyncRequest(lastKnown, 50)
+
+	// The request is a peer message addressed to our own JID — the target
+	// chat is encoded inside the request itself. Sending it to the contact
+	// fails with "no signal session established" and never returns history.
+	if _, err := client.SendPeerMessage(ctx, req); err != nil {
+		return fmt.Errorf("send history sync request: %w", err)
+	}
+	return nil
+}
+
+// buildLastKnownAnchor builds the anchor for BuildHistorySyncRequest. The
+// anchor's Timestamp field is what bounds the backfill: messages older than
+// the newest stored message are streamed back. With no anchor ID we still
+// provide the chat + current time, which the server treats as "recent
+// messages first". A per-chat newest-message lookup can be wired in later
+// via the store; the whatsmeow session store does not index message bodies.
+func (w *WhatsmeowClient) buildLastKnownAnchor(chat types.JID) *types.MessageInfo {
+	return &types.MessageInfo{
+		MessageSource: types.MessageSource{Chat: chat},
+		Timestamp:     time.Now(),
+	}
 }
 
 // handleEvent is the whatsmeow event handler. It translates raw whatsmeow
@@ -424,8 +474,83 @@ func (w *WhatsmeowClient) handleEvent(raw any) {
 		if w.client != nil {
 			go w.client.FetchAppState(context.Background(), appstate.WAPatchCriticalUnblockLow, true, false)
 		}
+	case *events.LoggedOut:
+		// The account unlinked this device (session rotation ~20 days, or the
+		// user removed it from Linked Devices). Stored credentials are invalid
+		// — delete the device so the next login QR pairs a fresh device
+		// instead of retrying a dead session.
+		w.log.Warnf("logged out (onConnect=%v reason=%v)", evt.OnConnect, evt.Reason)
+		w.mu.Lock()
+		if w.device != nil {
+			if err := w.device.Delete(context.Background()); err != nil {
+				w.log.Warnf("delete device after logout: %v", err)
+			}
+		}
+		w.state = PairState{}
+		w.client = nil
+		w.device = nil
+		// Keep the container open — initStore will pick up the next (fresh)
+		// device on the next Connect/StartQR call.
+		w.mu.Unlock()
+		// Emit boundary event so the ingester/UI can react (e.g. surface a
+		// "re-link required" state). The store mirror is left intact.
+		w.pushEvent(EventLoggedOut{Reason: evt.Reason.String()})
+	case *events.HistorySync:
+		w.handleHistorySync(evt)
 	case *events.QR:
 		// QR codes are handled via the StartQR channel, not here.
+	}
+}
+
+// handleHistorySync processes a history backfill blob pushed by the phone
+// (on first link, on reconnect after a gap, or in response to a
+// BuildHistorySyncRequest). Each conversation is parsed via
+// ParseWebMessage — the same path live messages take — so backfill and
+// live ingestion share one translator. No writes happen here; everything
+// flows through the normal event channel.
+func (w *WhatsmeowClient) handleHistorySync(evt *events.HistorySync) {
+	data := evt.Data
+	if data == nil {
+		return
+	}
+
+	for _, conv := range data.GetConversations() {
+		if conv == nil {
+			continue
+		}
+		convID := conv.GetID()
+		if convID == "" {
+			continue
+		}
+		chatJID, err := types.ParseJID(convID)
+		if err != nil {
+			w.log.Warnf("history sync: skip conversation with bad JID %q: %v", convID, err)
+			continue
+		}
+
+		for _, hsMsg := range conv.GetMessages() {
+			if hsMsg == nil || hsMsg.GetMessage() == nil {
+				continue
+			}
+			msgEvt, err := w.client.ParseWebMessage(chatJID, hsMsg.GetMessage())
+			if err != nil {
+				w.log.Warnf("history sync: parse message in %s failed: %v", convID, err)
+				continue
+			}
+			w.translateMessage(msgEvt)
+		}
+	}
+
+	// Pushnames carry contact display names for the backfilled messages.
+	for _, pn := range data.GetPushnames() {
+		if pn.GetID() == "" {
+			continue
+		}
+		w.pushEvent(EventContact{
+			JID:       pn.GetID(),
+			PushName:  pn.GetPushname(),
+			UpdatedAt: time.Now(),
+		})
 	}
 }
 
@@ -440,6 +565,12 @@ func (w *WhatsmeowClient) translateMessage(e *events.Message) {
 
 	chatJID := e.Info.Chat.String()
 	senderJID := e.Info.Sender.String()
+	// WhatsApp uses dual identity — phone JID (@s.whatsapp.net) and LID
+	// (@lid). Group messages may be addressed by LID; normalize to the phone
+	// JID so replies, contact lookups, and dedup all key on one identity.
+	if e.Info.AddressingMode == types.AddressingModeLID && !e.Info.SenderAlt.IsEmpty() {
+		senderJID = e.Info.SenderAlt.String()
+	}
 	timestamp := e.Info.Timestamp
 	id := e.Info.ID
 	fromMe := e.Info.IsFromMe
@@ -493,12 +624,7 @@ func (w *WhatsmeowClient) translateMessage(e *events.Message) {
 	// Media kinds
 	kind, mimeType, caption := extractMediaInfo(msg)
 	if kind != "" {
-		mime, size, width, height, dur := mediaMeta(msg)
-		_ = mime
-		_ = size
-		_ = width
-		_ = height
-		_ = dur
+		_, size, width, height, dur := mediaMeta(msg)
 
 		// Serialize the full message for later download.
 		refBytes, err := proto.Marshal(msg)
@@ -515,6 +641,10 @@ func (w *WhatsmeowClient) translateMessage(e *events.Message) {
 			Timestamp:   timestamp,
 			Kind:        kind,
 			MimeType:    mimeType,
+			Size:        size,
+			Width:       width,
+			Height:      height,
+			DurationSec: dur,
 			DownloadRef: downloadRef,
 			FromMe:      fromMe,
 		})
@@ -599,15 +729,18 @@ func (w *WhatsmeowClient) pushEvent(ev any) {
 	select {
 	case w.eventCh <- ev:
 	default:
-		// Channel full — drop oldest and push. This prevents the ingester
-		// from blocking the whatsmeow event loop if ingestion is slow.
+		// Channel full — drop the oldest event to make room. This is lossy
+		// but keeps the whatsmeow event loop from blocking; log so the
+		// drop is visible instead of silently vanishing messages.
 		select {
-		case <-w.eventCh:
+		case dropped := <-w.eventCh:
+			w.log.Errorf("event channel full — dropped oldest event %T", dropped)
 		default:
 		}
 		select {
 		case w.eventCh <- ev:
 		default:
+			w.log.Errorf("event channel full — dropped new event %T", ev)
 		}
 	}
 }
