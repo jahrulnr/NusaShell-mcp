@@ -304,7 +304,7 @@ func registerTools(s *server.MCPServer, cli Client, store *Store, ingester *Inge
 		mcp.WithDescription("Add a user/chat to the allowlist. When privacy mode is on, only allowlisted users may interact with the bot; others are dropped silently (not errored) so they never leak to automation."),
 		mcp.WithString("user_id",
 			mcp.Required(),
-			mcp.Description("Telegram user/chat id to allowlist (int64-as-string)."),
+			mcp.Description("Telegram user/chat to allowlist: numeric user id, @username, or display name (case-insensitive)."),
 		),
 	), handleAddToAllowlist(store))
 

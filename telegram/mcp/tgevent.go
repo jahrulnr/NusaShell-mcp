@@ -38,18 +38,19 @@ type TelegramEvent struct {
 
 // Well-known Data keys.
 const (
-	kChatID       = "chat_id"
-	kChatType     = "chat_type"
-	kChatName     = "chat_name"
-	kMessageID    = "message_id"
-	kText         = "text"
-	kSenderID     = "sender_id"
-	kSenderName   = "sender_name"
-	kFromMe       = "from_me"
-	kEditedAt     = "edited_at"
-	kUpdateID     = "update_id"
-	kCallbackID   = "callback_id"
-	kCallbackData = "callback_data"
+	kChatID         = "chat_id"
+	kChatType       = "chat_type"
+	kChatName       = "chat_name"
+	kMessageID      = "message_id"
+	kText           = "text"
+	kSenderID       = "sender_id"
+	kSenderUsername = "sender_username"
+	kSenderName     = "sender_name"
+	kFromMe         = "from_me"
+	kEditedAt       = "edited_at"
+	kUpdateID       = "update_id"
+	kCallbackID     = "callback_id"
+	kCallbackData   = "callback_data"
 )
 
 // --- Accessors (read from Data with safe type assertions) ---
@@ -103,6 +104,10 @@ func (e TelegramEvent) Text() string { return e.str(kText) }
 // SenderID returns the sender's user id as a string (empty for channel posts).
 func (e TelegramEvent) SenderID() string { return e.str(kSenderID) }
 
+// SenderUsername returns the sender's @username without the '@' (empty when
+// the sender has no username or it is unknown).
+func (e TelegramEvent) SenderUsername() string { return e.str(kSenderUsername) }
+
 // SenderName returns a human-readable sender label.
 func (e TelegramEvent) SenderName() string { return e.str(kSenderName) }
 
@@ -154,18 +159,19 @@ func normalizeMessage(t EventType, botID int64, m *telego.Message, editedAt int6
 		text = m.Caption
 	}
 
-	senderID, senderName, fromMe := senderInfo(botID, m)
+	senderID, senderUsername, senderName, fromMe := senderInfo(botID, m)
 
 	data := map[string]any{
-		kChatID:     chatID,
-		kChatType:   chatType,
-		kChatName:   chatName,
-		kMessageID:  strconv.Itoa(m.MessageID),
-		kText:       text,
-		kSenderID:   senderID,
-		kSenderName: senderName,
-		kFromMe:     fromMe,
-		kUpdateID:   updateID,
+		kChatID:         chatID,
+		kChatType:       chatType,
+		kChatName:       chatName,
+		kMessageID:      strconv.Itoa(m.MessageID),
+		kText:           text,
+		kSenderID:       senderID,
+		kSenderUsername: senderUsername,
+		kSenderName:     senderName,
+		kFromMe:         fromMe,
+		kUpdateID:       updateID,
 	}
 	if editedAt > 0 {
 		data[kEditedAt] = editedAt
@@ -192,20 +198,22 @@ func normalizeCallback(botID int64, q *telego.CallbackQuery, updateID int) Teleg
 
 	fromMe := botID != 0 && q.From.ID == botID
 	senderID := strconv.FormatInt(q.From.ID, 10)
+	senderUsername := q.From.Username
 	senderName := userDisplayName(q.From)
 
 	data := map[string]any{
-		kChatID:       chatID,
-		kChatType:     chatType,
-		kChatName:     chatName,
-		kMessageID:    messageID,
-		kText:         q.Data,
-		kSenderID:     senderID,
-		kSenderName:   senderName,
-		kFromMe:       fromMe,
-		kUpdateID:     updateID,
-		kCallbackID:   q.ID,
-		kCallbackData: q.Data,
+		kChatID:         chatID,
+		kChatType:       chatType,
+		kChatName:       chatName,
+		kMessageID:      messageID,
+		kText:           q.Data,
+		kSenderID:       senderID,
+		kSenderUsername: senderUsername,
+		kSenderName:     senderName,
+		kFromMe:         fromMe,
+		kUpdateID:       updateID,
+		kCallbackID:     q.ID,
+		kCallbackData:   q.Data,
 	}
 
 	return TelegramEvent{
@@ -215,12 +223,13 @@ func normalizeCallback(botID int64, q *telego.CallbackQuery, updateID int) Teleg
 	}
 }
 
-// senderInfo extracts the sender id, display name, and fromMe flag for a
-// message. Channel posts have no From (the channel is the sender); we use
-// SenderChat/Chat title as the name and treat fromMe as false.
-func senderInfo(botID int64, m *telego.Message) (id, name string, fromMe bool) {
+// senderInfo extracts the sender id, username, display name, and fromMe flag
+// for a message. Channel posts have no From (the channel is the sender); we
+// use SenderChat/Chat title as the name and treat fromMe as false.
+func senderInfo(botID int64, m *telego.Message) (id, username, name string, fromMe bool) {
 	if m.From != nil {
 		id = strconv.FormatInt(m.From.ID, 10)
+		username = m.From.Username
 		name = userDisplayName(*m.From)
 		if botID != 0 {
 			fromMe = m.From.ID == botID
@@ -232,6 +241,9 @@ func senderInfo(botID int64, m *telego.Message) (id, name string, fromMe bool) {
 	if m.SenderChat != nil {
 		name = chatDisplayName(*m.SenderChat)
 		id = strconv.FormatInt(m.SenderChat.ID, 10)
+		if m.SenderChat.Username != "" {
+			username = m.SenderChat.Username
+		}
 	}
 	return
 }

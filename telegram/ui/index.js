@@ -845,9 +845,12 @@ async function renderSettings(el) {
               </div>`).join('')}
         </div>
         <div class="input-with-action mt-8">
-          <input type="text" class="form-input" id="addAllowlistInput" placeholder="User ID numerik (int64)" autocomplete="off" />
+          <input type="text" class="form-input" id="addAllowlistInput" placeholder="ID numerik, @username, atau nama tampil" autocomplete="off" />
           <button class="btn btn-primary" onclick="addAllowlist()">Tambah</button>
         </div>
+        ${st.privacy_mode && allowlist.length === 0
+          ? '<div class="alert alert-danger mt-8" style="margin-bottom:0"><span>!</span><span>Privacy mode ON tapi allowlist kosong — semua pesan masuk akan di-block. Tambahkan setidaknya satu pengguna dulu.</span></div>'
+          : ''}
       </div>
 
       <div class="section-title">Tentang</div>

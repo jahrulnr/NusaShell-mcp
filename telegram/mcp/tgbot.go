@@ -479,14 +479,13 @@ func (c *BotClient) dropByPrivacy(e TelegramEvent) bool {
 	if e.FromMe() {
 		return false
 	}
-	sender := e.SenderID()
-	if sender == "" {
+	if e.SenderID() == "" {
 		return false
 	}
 	if !c.privacyEnforced() {
 		return false
 	}
-	return !c.senderAllowed(sender)
+	return !c.senderAllowed(e)
 }
 
 func (c *BotClient) privacyEnforced() bool {
@@ -497,9 +496,12 @@ func (c *BotClient) privacyEnforced() bool {
 	return v == "1"
 }
 
-// senderAllowed reports whether senderID is in the allowlist. On read error it
-// fails open (allows) so a transient store error never silently drops traffic.
-func (c *BotClient) senderAllowed(senderID string) bool {
+// senderAllowed reports whether an inbound event's sender is in the allowlist.
+// An allowlist entry may be a numeric user/chat id, an @username (with or
+// without the '@'), or a display name — matching is case-insensitive. On read
+// error it fails open (allows) so a transient store error never silently
+// drops traffic.
+func (c *BotClient) senderAllowed(e TelegramEvent) bool {
 	if c.store == nil {
 		return true
 	}
@@ -507,12 +509,39 @@ func (c *BotClient) senderAllowed(senderID string) bool {
 	if err != nil {
 		return true
 	}
-	for _, id := range list {
-		if id == senderID {
+	for _, entry := range list {
+		if allowlistMatch(entry, e.SenderID(), e.SenderUsername(), e.SenderName()) {
 			return true
 		}
 	}
 	return false
+}
+
+// allowlistMatch reports whether an allowlist entry permits a sender. The
+// entry may be a numeric id ("1234567890"), an @username ("@Jahrulnr" or
+// "Jahrulnr"), or a display name ("Jahrulnr"). Comparison is case-insensitive
+// after stripping a leading '@'. Pure function so the matching rules are
+// unit-testable without a store.
+func allowlistMatch(entry, senderID, senderUsername, senderName string) bool {
+	norm := normalizeKey(entry)
+	if norm == "" {
+		return false
+	}
+	if norm == normalizeKey(senderID) {
+		return true
+	}
+	if senderUsername != "" && norm == normalizeKey(senderUsername) {
+		return true
+	}
+	if senderName != "" && norm == normalizeKey(senderName) {
+		return true
+	}
+	return false
+}
+
+// normalizeKey lowercases and strips a leading '@' for allowlist comparison.
+func normalizeKey(s string) string {
+	return strings.ToLower(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(s), "@")))
 }
 
 // sendEvent pushes an event to the channel, dropping (with a log line) if the

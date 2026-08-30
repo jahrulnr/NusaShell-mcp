@@ -73,10 +73,16 @@ the chat and content before sending.
    the callback_data. Pending approvals are tracked in the store
    and surfaced by `list_pending_approvals`.
 
-8. **Streaming via `edit_message`.** For long AI responses, send a
+8. **Allowlist matching.** `add_to_allowlist` accepts a numeric user/chat
+   id, an `@username` (with or without the `@`), or a display name —
+   matching is case-insensitive. With privacy mode on, an inbound sender
+   is only allowed if one of these forms matches an allowlist entry;
+   otherwise the message is dropped silently.
+
+9. **Streaming via `edit_message`.** For long AI responses, send a
    preview then `edit_message` repeatedly. The UI updates the
    existing message (by `message_id`), not inserting duplicates.
 
-9. **Media limits.** Download limit 20 MB, upload limit 50 MB
+10. **Media limits.** Download limit 20 MB, upload limit 50 MB
    (cloud Bot API). Self-hosted Bot API server lifts download
    limit (2 GB upload).

@@ -289,6 +289,36 @@ func newStoreOf(t *testing.T) *Store {
 	return s
 }
 
+func TestAllowlistMatch(t *testing.T) {
+	cases := []struct {
+		name           string
+		entry          string
+		senderID       string
+		senderUsername string
+		senderName     string
+		want           bool
+	}{
+		{"numeric id matches", "111222", "111222", "", "Jahrulnr", true},
+		{"numeric id with @ case-insensitive", "@111222", "111222", "", "", true},
+		{"username matches with @", "@Jahrulnr", "999", "jahrulnr", "Jahrulnr", true},
+		{"username matches without @", "Jahrulnr", "999", "jahrulnr", "Jahrulnr", true},
+		{"username case-insensitive", "jahrulnr", "999", "Jahrulnr", "Dummy", true},
+		{"display name matches", "Jahrulnr", "999", "", "jahrulnr", true},
+		{"mismatch returns false", "@OrangLain", "999", "jahrulnr", "Jahrulnr", false},
+		{"empty entry never matches even with empty sender", "", "", "", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := allowlistMatch(tc.entry, tc.senderID, tc.senderUsername, tc.senderName); got != tc.want {
+				t.Errorf("allowlistMatch(%q, %q, %q, %q) = %v, want %v",
+					tc.entry, tc.senderID, tc.senderUsername, tc.senderName, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestValidateChatID ensures the accepted chat_id shapes match Telegram's
+// (int64-as-string, optional "-100" prefix, or @username).
 func TestValidateChatID(t *testing.T) {
 	valid := []string{"-1001234567890", "123456789", "@somechannel", "-42"}
 	for _, id := range valid {
