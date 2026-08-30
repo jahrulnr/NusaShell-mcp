@@ -843,9 +843,9 @@ func handleAnswerCallback(cli Client, store *Store) server.ToolHandlerFunc {
 		}
 
 		return jsonResult(map[string]any{
-			"status":           "ok",
+			"status":            "ok",
 			"callback_query_id": callbackQueryID,
-			"resolution":       status,
+			"resolution":        status,
 		})
 	}
 }

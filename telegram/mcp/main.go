@@ -78,6 +78,40 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ingester := NewIngester(store)
+
+	// Build the MCP server before wiring the push hook so the notifier
+	// closure captures a non-nil server (a message may arrive at any time
+	// once polling starts).
+	s := server.NewMCPServer("nusashell.telegram", "0.1.0",
+		server.WithToolCapabilities(true),
+		server.WithPromptCapabilities(false),
+		server.WithResourceCapabilities(false, false),
+	)
+
+	// Push hook: after an inbound message lands in the store, notify the host
+	// over MCP (server→client notification) so event-driven automation can
+	// react without polling. The host translates notifications/message into a
+	// domain event (e.g. "telegram.message") and matches when-triggers.
+	ingester.WithInboundNotify(func(ev TelegramEvent) {
+		subject := ev.SenderName()
+		if subject == "" {
+			subject = ev.ChatName()
+		}
+		if subject == "" {
+			subject = ev.ChatID()
+		}
+		s.SendNotificationToAllClients(notificationMessageMethod, map[string]any{
+			"plugin":     "nusashell.telegram",
+			"event":      "message",
+			"chat_id":    ev.ChatID(),
+			"message_id": ev.MessageID(),
+			"chat_type":  ev.ChatType(),
+			"subject":    subject,
+			"text":       truncateText(ev.Text(), 200),
+			"from_me":    ev.FromMe(),
+		})
+	})
+
 	go ingester.Run(ctx, cli.Events(ctx))
 
 	// Graceful shutdown on SIGINT/SIGTERM.
@@ -90,12 +124,6 @@ func main() {
 		cancel()
 	}()
 
-	// Build and register the MCP server.
-	s := server.NewMCPServer("nusashell.telegram", "0.1.0",
-		server.WithToolCapabilities(true),
-		server.WithPromptCapabilities(false),
-		server.WithResourceCapabilities(false, false),
-	)
 	registerTools(s, cli, store, ingester)
 
 	// Serve over stdio — diagnostics to stderr, stdout reserved for MCP.

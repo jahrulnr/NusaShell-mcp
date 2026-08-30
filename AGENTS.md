@@ -150,3 +150,20 @@ permanent fake "connected" state.
 Extract code first, then blockquotes into placeholders **before** HTML
 escaping (a raw `>` would survive as `&gt;`), then escape prose, then restore
 tags. Link URLs are already `&`-escaped by then — only escape `"`.
+
+### Push notifications (host event-driven automation)
+
+Message-bridge plugins can push `notifications/message` (MCP server→client)
+once an inbound message is stored, so the host can trigger automation without
+polling. Contract: params `{plugin, event: "message", chat_id, message_id,
+chat_type, subject, text (≤200 chars), from_me: false}`; only non-from-me
+messages; fire AFTER the store write (the responding workflow reads it back).
+Host side (`infrastructure/mcpclient/notify.go` in the NusaShell repo)
+translates it to `<short-id>.<event>` (e.g. `telegram.message`) and dedups on
+`Event.ID` (`mcp:<server>:<event>:<chat>:<msg>`). IMPORTANT host gotcha: a
+stdio MCP client created via `NewStdioMCPClientWithOptions` auto-starts the
+transport but not `client.Client.Start` — you MUST call `Start(ctx)` yourself
+or `SetNotificationHandler` is never wired and notifications are dropped
+silently. The ingester notifier hook lives in `main.go` via
+`ingester.WithInboundNotify(...)`; unit-test with
+`TestIngester_NotifiesOnInboundMessage`.

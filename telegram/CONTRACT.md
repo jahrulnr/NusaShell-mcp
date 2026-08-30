@@ -40,6 +40,15 @@ approval state are persisted locally in SQLite.
 | `set_privacy_mode` | Toggles local allowlist enforcement |
 | `status` | Reports bot status, connection state, database counts, the allowlist, and `unread_dm_count` (direct-message chats with unread messages — a scalar for automation gates) |
 
+**Push notifications.** After any inbound (non-bot) message is stored, the
+plugin emits an MCP **server→client notification** `notifications/message`
+with params `{plugin, event: "message", chat_id, message_id, chat_type,
+subject, text (≤200 chars), from_me: false}`. The host translates it into a
+`telegram.message` domain event for when-triggered automation, deduped per
+`(chat_id, message_id)`. Outbound (bot) messages never notify. For mock mode
+(`MOCK_ENABLED=1`) no notifications are emitted (the fake client has no live
+ingestion).
+
 **All send tools deliver real messages to real people.** Confirm
 the chat and content before sending.
 

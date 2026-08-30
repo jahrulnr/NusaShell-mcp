@@ -15,6 +15,25 @@ import (
 
 // --- environment / diagnostics --------------------------------------------
 
+// notificationMessageMethod is the MCP server→client notification method this
+// plugin pushes to the host after an inbound message is stored. The host maps
+// it to a domain event of type "<short-plugin-id>.message" (e.g.
+// "telegram.message") so when-triggered automation can react without polling.
+const notificationMessageMethod = "notifications/message"
+
+// truncateText returns text limited to max runes. Used to keep push
+// notification payloads bounded (the full text stays in the local store).
+func truncateText(text string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	r := []rune(text)
+	if len(r) <= max {
+		return text
+	}
+	return string(r[:max]) + "…"
+}
+
 // isVerbose reports whether TELEGRAM_VERBOSE is set to a truthy value.
 // Verbose mode enables extra stderr diagnostics from the client and ingester.
 func isVerbose() bool {

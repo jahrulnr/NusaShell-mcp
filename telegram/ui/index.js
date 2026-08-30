@@ -855,7 +855,7 @@ async function renderSettings(el) {
 
       <div class="section-title">Tentang</div>
       <div class="card about-footer">
-        NusaShell Telegram v0.2.2 · Bot API 10.3 · library <span class="mono">mymrac/telego</span> · data lokal SQLite (WAL + FTS5).
+        NusaShell Telegram v0.3.0 · Bot API 10.3 · library <span class="mono">mymrac/telego</span> · data lokal SQLite (WAL + FTS5).
       </div>
     </div>`;
 }

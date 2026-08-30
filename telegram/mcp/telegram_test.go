@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -349,6 +350,75 @@ func TestStatus_UnreadDMCount(t *testing.T) {
 	m := decodeResult(t, callHandler(t, h, nil))
 	if m["unread_dm_count"] != float64(1) {
 		t.Errorf("unread_dm_count = %v, want 1 (one unread DM, group ignored)", m["unread_dm_count"])
+	}
+}
+
+// TestIngester_NotifiesOnInboundMessage verifies the push hook: after an
+// inbound message (not from the bot) is stored, the ingester invokes the
+// notify callback once with the event; outbound (bot) messages never notify.
+func TestIngester_NotifiesOnInboundMessage(t *testing.T) {
+	store := newStoreOf(t)
+	ing := NewIngester(store)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var mu sync.Mutex
+	var got []string
+	ing.WithInboundNotify(func(ev TelegramEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		got = append(got, ev.ChatID()+"/"+ev.MessageID())
+	})
+
+	events := make(chan any, 4)
+	go ing.Run(ctx, events)
+
+	inbound := TelegramEvent{
+		Type: EventMessage,
+		Data: map[string]any{
+			kChatID:         "111111111",
+			kChatType:       "dm",
+			kChatName:       "Andi",
+			kMessageID:      "42",
+			kText:           "halo",
+			kSenderID:       "111111111",
+			kSenderName:     "Andi",
+			kFromMe:         false,
+			kUpdateID:       int64(1),
+			kSenderUsername: "andi",
+		},
+		Timestamp: time.Now().Unix(),
+	}
+	outbound := inbound
+	outbound.Data = make(map[string]any, len(inbound.Data))
+	for k, v := range inbound.Data {
+		outbound.Data[k] = v
+	}
+	outbound.Data[kMessageID] = "43"
+	outbound.Data[kFromMe] = true
+
+	events <- inbound
+	events <- outbound
+
+	deadline := time.After(2 * time.Second)
+	for {
+		mu.Lock()
+		n := len(got)
+		mu.Unlock()
+		if n >= 1 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("notify callback was not invoked for inbound message")
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 1 || got[0] != "111111111/42" {
+		t.Fatalf("notify calls = %v, want exactly [111111111/42] (outbound must be skipped)", got)
 	}
 }
 

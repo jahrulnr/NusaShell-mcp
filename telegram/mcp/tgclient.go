@@ -281,7 +281,9 @@ func (c *FakeClient) recordSend(ctx context.Context, chatID, text string) SendRe
 }
 
 // EditMessage is a no-op in mock mode.
-func (c *FakeClient) EditMessage(ctx context.Context, chatID, messageID, text, parseMode string) error { return nil }
+func (c *FakeClient) EditMessage(ctx context.Context, chatID, messageID, text, parseMode string) error {
+	return nil
+}
 
 // DeleteMessage is a no-op in mock mode.
 func (c *FakeClient) DeleteMessage(ctx context.Context, chatID, messageID string) error { return nil }
@@ -468,10 +470,10 @@ func (c *FakeClient) GetChatHistory(ctx context.Context, chatID string) []Messag
 // "now" so the UI always looks fresh.
 func mockData() (chats []ChatRow, messages map[string][]MessageRow, approvals []ApprovalRow) {
 	const (
-		devTeam   = "-1001234567890" // group
-		newsChan  = "-1009876543210" // channel
-		andiDM    = "111111111"      // dm
-		budiDM    = "222222222"      // dm
+		devTeam  = "-1001234567890" // group
+		newsChan = "-1009876543210" // channel
+		andiDM   = "111111111"      // dm
+		budiDM   = "222222222"      // dm
 	)
 	now := time.Now().Unix()
 	// step returns a timestamp `n` minutes before now.

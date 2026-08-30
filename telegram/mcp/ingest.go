@@ -29,9 +29,14 @@ const watermarkKey = "last_update_id"
 // It persists the high-water update_id after each event so a restart resumes
 // incrementally. If the events channel closes (long-poll dropped, network
 // blip), it attempts to reconnect via the callback set with WithReconnect.
+//
+// Inbound messages also trigger notifyInbound (when set) so the host can be
+// told "a message arrived" without polling (MCP server→client notification).
 type Ingester struct {
 	store     *Store
 	reconnect func(ctx context.Context) (<-chan any, error)
+
+	notifyInbound func(ev TelegramEvent)
 
 	lastEventAt  time.Time
 	lastUpdateID int
@@ -55,6 +60,14 @@ func NewIngester(store *Store) *Ingester {
 // is cancelled.
 func (in *Ingester) WithReconnect(fn func(ctx context.Context) (<-chan any, error)) *Ingester {
 	in.reconnect = fn
+	return in
+}
+
+// WithInboundNotify registers a callback invoked after an inbound message
+// (not from the bot) has been written to the store. It is the push hook the
+// host uses to trigger event-driven automation without polling.
+func (in *Ingester) WithInboundNotify(fn func(TelegramEvent)) *Ingester {
+	in.notifyInbound = fn
 	return in
 }
 
@@ -169,6 +182,11 @@ func (in *Ingester) handleMessage(ctx context.Context, e TelegramEvent) {
 	if !e.FromMe() {
 		if err := in.store.IncrementUnread(ctx, e.ChatID()); err != nil {
 			stderr("ingest: increment unread: %s", err)
+		}
+		// Push notification AFTER the message is durably stored so an
+		// event-driven host workflow reads it back via list_chats / get_messages.
+		if in.notifyInbound != nil {
+			in.notifyInbound(e)
 		}
 	}
 }

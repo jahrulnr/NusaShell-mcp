@@ -81,6 +81,13 @@ only version source: bump it, then CI tags `<plugin>-v<version>`.
   reset unread on read.
 - **Polling dies silently** — wrap getUpdates in a reconnect loop with backoff;
   flip Connected=false while down.
+- **Push notifications don't arrive** — plugin side: fire `notifications/message`
+  only after the store write and only for `from_me=false` (ingester
+  `WithInboundNotify`). Host side: `NewStdioMCPClientWithOptions` auto-starts
+  the transport but not `client.Client.Start` — call `Start(ctx)` or
+  `OnNotification` handlers never fire. Verify with the stdio integration test
+  (`TestManager_NotificationHandler`) and the plugin notify test
+  (`TestIngester_NotifiesOnInboundMessage`).
 
 ## Safety
 
