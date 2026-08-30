@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NusaShell — Telegram</title>
+  <link rel="stylesheet" href="./index.css" />
+  <script>
+    (function() {
+      var raw = localStorage.getItem('nusashell-telegram-theme') || 'default:system';
+      var parts = raw.split(':');
+      var visual = parts.length === 2 ? parts[0] : 'default';
+      var mode = parts.length === 2 ? parts[1] : raw;
+      if (mode === 'dark' || (mode !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches)) {
+        document.documentElement.classList.add('dark');
+      }
+      if (visual === 'brutalist') document.documentElement.classList.add('theme-brutalist');
+      if (visual === 'glass') document.documentElement.classList.add('theme-glass');
+      if (visual === 'softnight') document.documentElement.classList.add('theme-softnight');
+    })();
+  </script>
+</head>
+<body>
+  <div id="app">
+    <nav id="sidebar">
+      <div class="sidebar-brand">
+        <span class="brand-icon">🔌</span>
+        <span class="brand-text">NusaShell</span>
+        <span class="brand-sub">Telegram</span>
+      </div>
+      <div class="sidebar-nav">
+        <a href="#/login" data-page="login" class="nav-item">
+          <span class="nav-icon">🔑</span><span class="nav-label">Login</span>
+        </a>
+        <a href="#/status" data-page="status" class="nav-item">
+          <span class="nav-icon">📊</span><span class="nav-label">Status</span>
+        </a>
+        <a href="#/chats" data-page="chats" class="nav-item">
+          <span class="nav-icon">💬</span><span class="nav-label">Chats</span>
+        </a>
+        <a href="#/approvals" data-page="approvals" class="nav-item">
+          <span class="nav-icon">🔕</span><span class="nav-label">Approvals</span>
+        </a>
+        <a href="#/settings" data-page="settings" class="nav-item">
+          <span class="nav-icon">⚙️</span><span class="nav-label">Settings</span>
+        </a>
+      </div>
+      <div class="sidebar-footer">
+        <span class="sidebar-version">v0.1.0</span>
+        <span class="sidebar-hint">Bot API 10.3</span>
+      </div>
+    </nav>
+    <main id="content">
+      <!-- Pages rendered by JS -->
+    </main>
+  </div>
+
+  <div id="toast-container" aria-live="polite" aria-atomic="true"></div>
+
+  <div id="confirm-dialog" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
+    <div class="modal-card">
+      <h2 id="confirm-dialog-title" class="modal-title"></h2>
+      <p id="confirm-dialog-message" class="modal-message"></p>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" onclick="handleConfirmCancel()">Cancel</button>
+        <button type="button" class="btn btn-primary" id="confirm-dialog-ok" onclick="handleConfirmOk()">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="./index.js"></script>
+</body>
+</html>

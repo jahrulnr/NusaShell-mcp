@@ -1,0 +1,23 @@
+NusaShell Telegram plugin
+
+This plugin uses the following open-source components:
+
+- [mymmrac/telego](https://github.com/mymmrac/telego) — Telegram Bot API
+  client library (MIT). Production-tested on GoClaw multi-tenant
+  deployments.
+- [mark3labs/mcp-go](https://github.com/mark3labs/mcp-go) — MCP SDK
+  for Go (MIT). Also used by the NusaShell Kanban plugin.
+- [NusaShell](https://github.com/jahrulnr/NusaShell) — the shell
+  runtime and mcpkit helpers.
+
+Pattern references (not copied):
+
+- GoClaw (nlb_io / nlb_io) — pairing via native Telegram message,
+  album coalescing, streaming preview via editMessageText, default-deny
+  ACL. See `telegram-research/06-ui-ux-from-real-code.md`.
+- OpenClaw (Peter Steinberger) — inline button approval flow,
+  session per chat/group/topic.
+- Hermes Agent (NousResearch) — multi-platform adapter patterns.
+
+GoClaw is an external project (CC BY-NC 4.0). Its patterns are
+referenced for research purposes only.
