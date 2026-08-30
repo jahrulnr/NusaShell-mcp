@@ -18,7 +18,7 @@ concurrency:
 env:
   CI: true
   GO_VERSION: "1.26"
-  KNOWN_PLUGINS: "kanban notes whatsapp"
+  KNOWN_PLUGINS: "kanban notes whatsapp telegram"
 
 jobs:
   detect:
