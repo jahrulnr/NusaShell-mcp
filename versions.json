@@ -15,8 +15,8 @@
     "releasedAt": "2026-08-30T08:25:23Z"
   },
   "telegram": {
-    "version": "0.2.1",
-    "tag": "telegram-v0.2.1",
-    "releasedAt": "2026-08-30T19:49:38Z"
+    "version": "0.2.2",
+    "tag": "telegram-v0.2.2",
+    "releasedAt": "2026-08-30T20:22:17Z"
   }
 }
