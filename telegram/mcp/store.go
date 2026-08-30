@@ -450,6 +450,16 @@ func (s *Store) CountChats(ctx context.Context) (int, error) {
 	return n, err
 }
 
+// CountUnreadDMs returns the number of tracked direct-message chats with an
+// unread count > 0 — the "there is a DM waiting for a reply" signal used by
+// automation gates and status pages.
+func (s *Store) CountUnreadDMs(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM chats WHERE type = 'dm' AND unread_count > 0`).Scan(&n)
+	return n, err
+}
+
 // GetOrCreateDefaultProject is a compatibility shim with the Kanban plugin's
 // store contract. Telegram has no projects, so it simply records a sentinel
 // meta entry. It never fails in a way that blocks startup.

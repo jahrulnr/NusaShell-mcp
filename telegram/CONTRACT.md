@@ -38,7 +38,7 @@ approval state are persisted locally in SQLite.
 | `add_to_allowlist` | Adds a user/chat to the allowlist |
 | `remove_from_allowlist` | Removes a user/chat from the allowlist |
 | `set_privacy_mode` | Toggles local allowlist enforcement |
-| `status` | Reports bot status, connection state, database counts, and the allowlist |
+| `status` | Reports bot status, connection state, database counts, the allowlist, and `unread_dm_count` (direct-message chats with unread messages — a scalar for automation gates) |
 
 **All send tools deliver real messages to real people.** Confirm
 the chat and content before sending.

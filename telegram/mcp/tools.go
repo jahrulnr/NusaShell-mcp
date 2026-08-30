@@ -348,6 +348,7 @@ func handleStatus(cli Client, store *Store, ingester *Ingester) server.ToolHandl
 		state := cli.State()
 		msgCount, _ := store.CountMessages(ctx)
 		chatCount, _ := store.CountChats(ctx)
+		unreadDMs, _ := store.CountUnreadDMs(ctx)
 		privacyMode, _ := store.GetMeta(ctx, privacyModeMetaKey)
 		allowlist, _ := store.ListAllowlist(ctx)
 		if allowlist == nil {
@@ -364,17 +365,18 @@ func handleStatus(cli Client, store *Store, ingester *Ingester) server.ToolHandl
 		}
 
 		result := map[string]any{
-			"paired":         state.Paired,
-			"connected":      state.Connected,
-			"bot_id":         state.BotID,
-			"bot_name":       state.BotName,
-			"awaiting_token": state.AwaitingToken,
-			"privacy_mode":   privacyMode == "1",
-			"message_count":  msgCount,
-			"chat_count":     chatCount,
-			"last_event_at":  lastEventAt,
-			"last_event_ago": lastEventAgo,
-			"allowlist":      allowlist,
+			"paired":          state.Paired,
+			"connected":       state.Connected,
+			"bot_id":          state.BotID,
+			"bot_name":        state.BotName,
+			"awaiting_token":  state.AwaitingToken,
+			"privacy_mode":    privacyMode == "1",
+			"message_count":   msgCount,
+			"chat_count":      chatCount,
+			"unread_dm_count": unreadDMs,
+			"last_event_at":   lastEventAt,
+			"last_event_ago":  lastEventAgo,
+			"allowlist":       allowlist,
 		}
 		switch {
 		case !state.Paired:

@@ -319,6 +319,39 @@ func TestAllowlistMatch(t *testing.T) {
 
 // TestValidateChatID ensures the accepted chat_id shapes match Telegram's
 // (int64-as-string, optional "-100" prefix, or @username).
+// TestStatus_UnreadDMCount feeds the automation gate: status exposes a scalar
+// unread_dm_count so a workflow can cheaply check "is there a DM waiting"
+// (uses: Telegram.status) and only spawn an agent step when it is != 0.
+func TestStatus_UnreadDMCount(t *testing.T) {
+	store, cli, ing, _ := newTestRig(t)
+	ctx := context.Background()
+	now := time.Now().Unix()
+
+	// Seeded mock data has unread on a group + channel, none on DMs.
+	h := handleStatus(cli, store, ing)
+	if m := decodeResult(t, callHandler(t, h, nil)); m["unread_dm_count"] != float64(0) {
+		t.Errorf("unread_dm_count = %v, want 0 (seed has no unread DM)", m["unread_dm_count"])
+	}
+
+	// An unread DM flips the counter; an unread group does not.
+	if err := store.UpsertChat(ctx, "111111111", "dm", "Andi", "halo", now); err != nil {
+		t.Fatalf("UpsertChat dm: %v", err)
+	}
+	if err := store.IncrementUnread(ctx, "111111111"); err != nil {
+		t.Fatalf("IncrementUnread: %v", err)
+	}
+	if err := store.UpsertChat(ctx, "-1001234567890", "group", "Dev", "x", now); err != nil {
+		t.Fatalf("UpsertChat group: %v", err)
+	}
+	if err := store.IncrementUnread(ctx, "-1001234567890"); err != nil {
+		t.Fatalf("IncrementUnread group: %v", err)
+	}
+	m := decodeResult(t, callHandler(t, h, nil))
+	if m["unread_dm_count"] != float64(1) {
+		t.Errorf("unread_dm_count = %v, want 1 (one unread DM, group ignored)", m["unread_dm_count"])
+	}
+}
+
 func TestValidateChatID(t *testing.T) {
 	valid := []string{"-1001234567890", "123456789", "@somechannel", "-42"}
 	for _, id := range valid {
