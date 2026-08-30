@@ -33,6 +33,14 @@ type QRCode struct {
 	ExpiresAt time.Time // when the QR expires
 }
 
+// PairCode is a phone-number pairing code event delivered to the UI. Unlike
+// QR, the code is a single short string (e.g. "ABCD-1234") and the channel
+// emits it once — re-call StartPairCode for a fresh code.
+type PairCode struct {
+	Code      string    // the dash-formatted pairing code (e.g. "ABCD-1234")
+	ExpiresAt time.Time // when the code expires (conservative: ~120s)
+}
+
 // PairState describes the current linking state for the status/login tools.
 type PairState struct {
 	Paired     bool   // true if a WhatsApp account is linked
@@ -56,6 +64,18 @@ type Client interface {
 	// or UI) renders each QR. A successful scan is signaled by State().Paired
 	// becoming true and the events channel emitting a PairSuccess-equivalent.
 	StartQR(ctx context.Context) (<-chan QRCode, error)
+
+	// StartPairCode begins a phone-number pairing (OTP) login flow. The
+	// phone argument must be in E.164 form (no leading '+', no leading '0',
+	// no spaces/dashes) — helpers.normalizePhone handles common input
+	// variations. Returns a channel that emits a single pairing code; the
+	// caller renders the code to the user, who must enter it on the phone
+	// (WhatsApp → Settings → Linked Devices → Link with phone number).
+	// Implementation must drain the underlying whatsmeow QR channel while
+	// waiting (whatsmeow requires an open login socket to issue the code) and
+	// emit the same "code"/"success" lifecycle as StartQR, so callers can
+	// wait on a single channel type for either pairing mode.
+	StartPairCode(ctx context.Context, phone string) (<-chan PairCode, error)
 
 	// Connect brings the WhatsApp socket up using stored credentials. If no
 	// credentials exist, returns ErrNotPaired so the caller can start QR login.

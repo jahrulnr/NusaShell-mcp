@@ -185,7 +185,7 @@ func (w *WhatsmeowClient) StartQR(ctx context.Context) (<-chan QRCode, error) {
 		return nil, fmt.Errorf("connect for qr: %w", err)
 	}
 
-	out := make(chan QRCode, 8)
+		out := make(chan QRCode, 8)
 	go func() {
 		defer close(out)
 		for {
@@ -211,6 +211,119 @@ func (w *WhatsmeowClient) StartQR(ctx context.Context) (<-chan QRCode, error) {
 					return
 				}
 			}
+		}
+	}()
+
+	return out, nil
+}
+
+// StartPairCode begins a phone-number pairing flow. It is the code-paired
+// counterpart to StartQR: it reuses the same login socket (whatsmeow
+// requires an open websocket to issue the pairing code) and reuses the
+// internal QR channel as a wakeup source for the "success" event. The
+// returned channel emits exactly one PairCode; resolution is signalled by
+// the underlying socket emitting events.PairSuccess (drained via qrChan).
+//
+// The phone must be normalized to E.164 by the caller — use
+// helpers.normalizePhone to accept friendly input like "+62 812-3456-7890".
+func (w *WhatsmeowClient) StartPairCode(ctx context.Context, phone string) (<-chan PairCode, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.client == nil {
+		if err := w.initStore(ctx); err != nil {
+			return nil, err
+		}
+		w.newClient()
+	}
+
+	// Cancel any prior login flow.
+	if w.qrCxl != nil {
+		w.qrCxl()
+	}
+	pairCtx, cancel := context.WithCancel(ctx)
+	w.qrCtx = pairCtx
+	w.qrCxl = cancel
+	w.state.AwaitingQR = true
+
+	// GetQRChannel + Connect: same as StartQR. PairPhone REQUIRES the
+	// websocket to be open and at least one QR event delivered; we grab the
+	// channel first and drain it in the background while we issue the code.
+	qrChan, err := w.client.GetQRChannel(pairCtx)
+	if err != nil {
+		cancel()
+		w.state.AwaitingQR = false
+		return nil, fmt.Errorf("get qr channel: %w", err)
+	}
+	if err := w.client.Connect(); err != nil {
+		cancel()
+		w.state.AwaitingQR = false
+		return nil, fmt.Errorf("connect for pair code: %w", err)
+	}
+
+	// Drain the underlying QR channel in a side goroutine — we don't expose
+	// QR codes to the caller, but we must consume the channel so whatsmeow's
+	// state machine progresses, and we still want to detect "success" so we
+	// can close the pair channel promptly after the user finishes typing.
+	drainDone := make(chan struct{})
+	go func() {
+		defer close(drainDone)
+		for {
+			select {
+			case <-pairCtx.Done():
+				return
+			case evt, ok := <-qrChan:
+				if !ok {
+					return
+				}
+				if evt.Event == "success" {
+					return
+				}
+			}
+		}
+	}()
+
+	out := make(chan PairCode, 1)
+
+	// Issue the pairing code synchronously so the caller can render the
+	// dashed code immediately. whatsmeow internally stashes the linking
+	// state; the actual handshake completes when the phone enters the code.
+	code, err := w.client.PairPhone(
+		pairCtx,
+		phone,
+		true,                    // showPushNotification — match WhatsApp Web behaviour
+		whatsmeow.PairClientChrome,
+		"Chrome (Linux)",
+	)
+	if err != nil {
+		cancel()
+		w.state.AwaitingQR = false
+		// Best-effort drain shutdown; the side goroutine exits when qrChan
+		// is closed by whatsmeow after the login socket is torn down.
+		<-drainDone
+		return nil, fmt.Errorf("issue pair code: %w", err)
+	}
+
+	// Push the single code event. We bound the expiry conservatively at
+	// 120s — whatsmeow's docs note a 160s socket budget, but a slightly
+	// shorter UI hint avoids showing expired codes to the user.
+	pairEvent := PairCode{
+		Code:      code,
+		ExpiresAt: time.Now().Add(120 * time.Second),
+	}
+	select {
+	case out <- pairEvent:
+	case <-pairCtx.Done():
+	}
+
+	// Wait for the drain goroutine to observe "success" or context cancel.
+	// We deliberately do NOT close `out` after the user submits the code —
+	// the handler in tools.go closes its own sub-context when the MCP
+	// request returns, and the channel's lifetime is bounded by that.
+	go func() {
+		select {
+		case <-drainDone:
+		case <-pairCtx.Done():
 		}
 	}()
 

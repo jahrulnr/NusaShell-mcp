@@ -18,6 +18,7 @@ import (
 const (
 	toolStatus        = "status"
 	toolLogin         = "login"
+	toolPairWithCode  = "pair_with_code"
 	toolLogout        = "logout"
 	toolListChats     = "list_chats"
 	toolGetChat       = "get_chat"
@@ -40,8 +41,16 @@ func registerTools(s *server.MCPServer, cli Client, store *Store, ingester *Inge
 	), handleStatus(cli, store, ingester))
 
 	s.AddTool(mcp.NewTool(toolLogin,
-		mcp.WithDescription("Start WhatsApp QR login flow. Returns the QR code string to scan with your phone (WhatsApp → Settings → Linked Devices → Link a Device). The QR expires in ~60 seconds; re-call login for a fresh one."),
+		mcp.WithDescription("Start WhatsApp QR login flow. Returns the QR code string to scan with your phone (WhatsApp → Settings → Linked Devices → Link a Device). The QR expires in ~60 seconds; re-call login for a fresh one. If QR scanning is not viable (e.g. camera blocked, server rejecting repeated QR attempts), use pair_with_code instead — it issues an 8-character code you can type on the phone."),
 	), handleLogin(cli))
+
+	s.AddTool(mcp.NewTool(toolPairWithCode,
+		mcp.WithDescription("Start WhatsApp phone-number pairing flow as an alternative to QR login. The phone number is auto-normalized to E.164 (accepts '+62 812-3456-7890', '0812-3456-7890', '6281234567890', etc. — default country code is 62/Indonesia). Returns a short dash-formatted code (e.g. 'ABCD-1234') that you must enter on the phone (WhatsApp → Settings → Linked Devices → Link with phone number). The code expires after ~120 seconds. Note: this pairing method may not be available for all WhatsApp accounts (consumer accounts sometimes have it disabled at the server level)."),
+		mcp.WithString("phone",
+			mcp.Required(),
+			mcp.Description("Phone number in any common format: '+62 812-3456-7890', '0812-3456-7890', or '6281234567890'. Plugin strips non-digits, drops leading 0s, and prepends the default country code (62) if missing."),
+		),
+	), handlePairWithCode(cli))
 
 	s.AddTool(mcp.NewTool(toolLogout,
 		mcp.WithDescription("Disconnect and clear WhatsApp auth state. The account must be re-linked via login afterwards."),
@@ -274,6 +283,57 @@ func handleLogin(cli Client) server.ToolHandlerFunc {
 			})
 		case <-time.After(10 * time.Second):
 			return errorResult(fmt.Errorf("timed out waiting for QR code")), nil
+		case <-ctx.Done():
+			return errorResult(ctx.Err()), nil
+		}
+	}
+}
+
+func handlePairWithCode(cli Client) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		state := cli.State()
+		if state.Paired {
+			return errorResult(fmt.Errorf("already paired as %s. Call logout first to re-link.", state.DeviceJID)), nil
+		}
+
+		rawPhone := argString(req.GetArguments(), "phone")
+		if rawPhone == "" {
+			return errorResult(fmt.Errorf("phone is required")), nil
+		}
+
+		// Normalize to E.164 — default country code is 62 (Indonesia). The
+		// helper accepts '+62...', '0812...', and '62812...' and returns a
+		// clean error if the number is too short or otherwise invalid,
+		// which is friendlier than a cryptic whatsmeow error.
+		phone, err := normalizePhone(rawPhone, "")
+		if err != nil {
+			return errorResult(fmt.Errorf("normalize phone: %w", err)), nil
+		}
+
+		pairCh, err := cli.StartPairCode(ctx, phone)
+		if err != nil {
+			return errorResult(fmt.Errorf("start pair code: %w", err)), nil
+		}
+
+		// Wait for the single pair-code event. The same channel will close
+		// once the underlying drain goroutine observes "success" or context
+		// cancel, but the handler returns the code immediately and lets the
+		// user submit it asynchronously on the phone. We do NOT block on
+		// "success" here because the user may need >2 minutes to type the
+		// code; the connection itself stays open in the background.
+		select {
+		case pc, ok := <-pairCh:
+			if !ok {
+				return errorResult(fmt.Errorf("pair code channel closed before code was received")), nil
+			}
+			return jsonResult(map[string]any{
+				"pair_code":  pc.Code,
+				"expires_at": pc.ExpiresAt.Unix(),
+				"phone":      phone,
+				"hint":       "Enter this code on your phone: WhatsApp → Settings → Linked Devices → Link with phone number. The code expires after ~120 seconds. If pairing fails, the connection will close — call pair_with_code again for a fresh code.",
+			})
+		case <-time.After(15 * time.Second):
+			return errorResult(fmt.Errorf("timed out waiting for pair code from WhatsApp server")), nil
 		case <-ctx.Done():
 			return errorResult(ctx.Err()), nil
 		}

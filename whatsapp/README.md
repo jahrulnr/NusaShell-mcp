@@ -38,6 +38,7 @@ cd whatsapp/mcp && go build -o server .
 |------|---------|
 | `status` | Connection state, linked JID, ingestion freshness, DB row counts |
 | `login` | Start QR pairing flow; returns QR code string |
+| `pair_with_code` | Start phone-number pairing flow; returns 8-char code (alternative to QR) |
 | `logout` | Disconnect and clear WhatsApp auth state |
 | `list_chats` | Recent chats, newest activity first; optional `kind` filter (`dm`/`group`) |
 | `get_chat` | Chat metadata by JID (group participants for groups) |

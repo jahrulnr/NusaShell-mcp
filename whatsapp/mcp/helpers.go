@@ -129,3 +129,69 @@ func argBool(args map[string]any, key string) bool {
 	v, _ := args[key].(bool)
 	return v
 }
+
+// normalizePhone converts a friendly phone-number string into E.164 form
+// suitable for whatsmeow's PairPhone. It strips non-digits, then:
+//   - if the result starts with one or more leading '0', drops them and
+//     prepends the defaultCountryCode (so "0812..." → "62812..." for ID);
+//   - if the result already starts with a country code (no leading 0) and
+//     is long enough, returns it unchanged.
+//
+// Returns an error if the resulting string is too short (< 7 digits) — WA
+// refuses numbers below that, and emitting a clean error here is friendlier
+// than a cryptic whatsmeow.ErrPhoneNumberTooShort.
+//
+// The default country code can be overridden by passing a non-empty
+// countryCode argument; pass "" to use the ID default.
+func normalizePhone(input, countryCode string) (string, error) {
+	if countryCode == "" {
+		countryCode = "62" // default for Indonesian numbers
+	}
+	// Strip everything that isn't a digit.
+	stripped := make([]byte, 0, len(input))
+	for i := 0; i < len(input); i++ {
+		c := input[i]
+		if c >= '0' && c <= '9' {
+			stripped = append(stripped, c)
+		}
+	}
+	digits := string(stripped)
+	if digits == "" {
+		return "", fmt.Errorf("phone number is empty after stripping non-digits")
+	}
+	// Drop leading zeros; if everything was zeros, leave one so the
+	// length check below catches it.
+	for len(digits) > 1 && digits[0] == '0' {
+		digits = digits[1:]
+	}
+	// If after dropping zeros the number doesn't start with the country
+	// code, prepend it. This handles the common "08123..." case. We bail
+	// out early if the digit count is too low to ever form a valid E.164
+	// after prepending — otherwise a 5-digit input would silently become a
+	// 7-digit "62xxxxx" number, which the server would either reject with
+	// a cryptic error or, worse, accept as a non-existent user.
+	if !startsWithCountryCode(digits, countryCode) {
+		if len(digits) < 7 {
+			return "", fmt.Errorf("phone number has %d digits — too short to form a valid E.164 number", len(digits))
+		}
+		digits = countryCode + digits
+	}
+	// Final E.164 sanity check: 7-15 digits, leading digit non-zero.
+	if len(digits) < 7 || len(digits) > 15 {
+		return "", fmt.Errorf("phone number length %d is out of E.164 range (7-15 digits)", len(digits))
+	}
+	if digits[0] == '0' {
+		return "", fmt.Errorf("phone number has a leading zero after normalization: %s", digits)
+	}
+	return digits, nil
+}
+
+// startsWithCountryCode reports whether digits already has the country
+// code as a prefix. We compare the *digits* (not the full E.164 form) so
+// that, e.g., a "62" country code matches "62812..." but not "162...".
+func startsWithCountryCode(digits, countryCode string) bool {
+	if len(digits) < len(countryCode) {
+		return false
+	}
+	return digits[:len(countryCode)] == countryCode
+}
