@@ -132,11 +132,9 @@ func (s *Store) migrate() error {
 			value TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE VIRTUAL TABLE IF NOT EXISTS fts_messages USING fts5(
-			message_id UNINDEXED,
-			chat_id UNINDEXED,
-			text,
-			content='messages',
-			content_rowid='rowid'
+			message_id,
+			chat_id,
+			text
 		)`,
 		// FTS5 triggers keep the index in sync with the messages table.
 		`CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
@@ -153,6 +151,21 @@ func (s *Store) migrate() error {
 			INSERT INTO fts_messages(message_id, chat_id, text)
 			VALUES (new.id, new.chat_id, COALESCE(new.text, ''));
 		END`,
+		// FTS rebuild for databases created before v0.2: the old definition used
+		// content='messages' (external content). That requires the content table
+		// to expose a rowid, but messages has a composite TEXT primary key and is
+		// therefore WITHOUT ROWID — the external-content index is unwritable and
+		// search_messages fails with "no such column". We drop it and recreate
+		// the FTS table as a self-contained regular FTS5 table, then repopulate
+		// from messages. Idempotent: on fresh DBs this is a no-op re-create.
+		`DROP TABLE IF EXISTS fts_messages`,
+		`CREATE VIRTUAL TABLE IF NOT EXISTS fts_messages USING fts5(
+			message_id,
+			chat_id,
+			text
+		)`,
+		`INSERT INTO fts_messages(message_id, chat_id, text)
+		 SELECT id, chat_id, COALESCE(text, '') FROM messages`,
 	}
 	for _, m := range migrations {
 		if _, err := s.db.Exec(m); err != nil {
@@ -167,12 +180,14 @@ func (s *Store) migrate() error {
 // UpsertChat inserts or updates a chat row. A non-empty name overrides the
 // stored name; an empty name preserves the existing value so incremental
 // updates that only carry a new last_message don't wipe a resolved name.
+// The same applies to type: an empty type preserves the stored classification
+// (used when an outbound send has no chat-type evidence yet).
 func (s *Store) UpsertChat(ctx context.Context, id, typ, name, lastMsg string, lastMsgAt int64) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO chats (id, type, name, last_message, last_message_at, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
-		   type=excluded.type,
+		   type=CASE WHEN excluded.type != '' THEN excluded.type ELSE chats.type END,
 		   name=CASE WHEN excluded.name != '' THEN excluded.name ELSE chats.name END,
 		   last_message=excluded.last_message,
 		   last_message_at=excluded.last_message_at`,

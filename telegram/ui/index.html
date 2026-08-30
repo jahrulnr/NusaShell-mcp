@@ -6,52 +6,54 @@
   <title>NusaShell — Telegram</title>
   <link rel="stylesheet" href="./index.css" />
   <script>
-    (function() {
+    (function () {
       var raw = localStorage.getItem('nusashell-telegram-theme') || 'default:system';
       var parts = raw.split(':');
-      var visual = parts.length === 2 ? parts[0] : 'default';
       var mode = parts.length === 2 ? parts[1] : raw;
       if (mode === 'dark' || (mode !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches)) {
         document.documentElement.classList.add('dark');
       }
-      if (visual === 'brutalist') document.documentElement.classList.add('theme-brutalist');
-      if (visual === 'glass') document.documentElement.classList.add('theme-glass');
-      if (visual === 'softnight') document.documentElement.classList.add('theme-softnight');
     })();
   </script>
 </head>
 
 <body>
   <div id="app">
-    <nav id="sidebar">
+    <aside id="sidebar">
       <div class="sidebar-brand">
-        <span class="brand-icon">🔌</span>
-        <span class="brand-text">NusaShell</span>
-        <span class="brand-sub">Telegram</span>
+        <span class="brand-mark">✈</span>
+        <div class="brand-copy">
+          <span class="brand-text">NusaShell</span>
+          <span class="brand-sub">Telegram</span>
+        </div>
       </div>
-      <div class="sidebar-nav">
-        <a href="#/login" data-page="login" class="nav-item">
-          <span class="nav-icon">🔑</span><span class="nav-label">Login</span>
+
+      <nav class="sidebar-nav">
+        <a href="#/status" data-page="status" class="nav-item" title="Status">
+          <span class="nav-icon">●</span><span class="nav-label">Status</span>
         </a>
-        <a href="#/status" data-page="status" class="nav-item">
-          <span class="nav-icon">📊</span><span class="nav-label">Status</span>
-        </a>
-        <a href="#/chats" data-page="chats" class="nav-item">
+        <a href="#/chats" data-page="chats" class="nav-item" title="Chats">
           <span class="nav-icon">💬</span><span class="nav-label">Chats</span>
         </a>
-        <a href="#/approvals" data-page="approvals" class="nav-item">
-          <span class="nav-icon">🔕</span><span class="nav-label">Approvals</span>
+        <a href="#/approvals" data-page="approvals" class="nav-item" title="Approvals">
+          <span class="nav-icon">☑</span><span class="nav-label">Approvals</span>
+          <span class="nav-badge" id="approvalBadge" style="display:none"></span>
         </a>
-        <a href="#/settings" data-page="settings" class="nav-item">
-          <span class="nav-icon">⚙️</span><span class="nav-label">Settings</span>
+        <a href="#/settings" data-page="settings" class="nav-item" title="Settings">
+          <span class="nav-icon">⚙</span><span class="nav-label">Settings</span>
         </a>
-      </div>
+      </nav>
+
       <div class="sidebar-footer">
-        <span class="sidebar-version">v0.1.0</span>
-        <span class="sidebar-hint">Bot API 10.3</span>
+        <div class="conn-chip" id="connChip" title="Connection state">
+          <span class="conn-dot" id="connDot"></span>
+          <span class="conn-label" id="connLabel">—</span>
+        </div>
+        <span class="sidebar-meta">v0.2.0</span>
       </div>
-    </nav>
-    <main id="content">
+    </aside>
+
+    <main id="content" aria-live="polite">
       <!-- Pages rendered by JS -->
     </main>
   </div>
@@ -64,7 +66,7 @@
       <p id="confirm-dialog-message" class="modal-message"></p>
       <div class="modal-actions">
         <button type="button" class="btn btn-secondary" onclick="handleConfirmCancel()">Cancel</button>
-        <button type="button" class="btn btn-primary" id="confirm-dialog-ok" onclick="handleConfirmOk()">OK</button>
+        <button type="button" class="btn btn-danger" id="confirm-dialog-ok" onclick="handleConfirmOk()">Confirm</button>
       </div>
     </div>
   </div>

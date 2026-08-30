@@ -78,6 +78,12 @@ func markdownToHTML(text string) string {
 	holder := tgExtractCode(text)
 	text = holder.text
 
+	// Blockquotes: group consecutive "> ..." lines into numbered placeholders
+	// HERE — before HTML escaping — because the raw ">" marker would survive
+	// as "&gt;" and never be detected afterwards. Placeholders are NUL-tagged,
+	// untouched by sanitizeForTelegram, and restored as real tags post-escape.
+	text = groupBlockquotes(text)
+
 	// Escape HTML special chars in the prose. Code contents are escaped
 	// separately when restored.
 	text = sanitizeForTelegram(text)
@@ -85,18 +91,16 @@ func markdownToHTML(text string) string {
 	// Headers (##, ###, etc.) → <b>text</b> (Telegram has no header concept).
 	text = regexp.MustCompile(`(?m)^#{1,6}\s+(.+)$`).ReplaceAllString(text, "<b>$1</b>")
 
-	// Blockquotes: group consecutive "> ..." lines into one <blockquote>.
-	text = groupBlockquotes(text)
-
-	// Links [text](url) → <a href="url">text</a>. Escape & in the URL so the
-	// attribute stays valid HTML.
+	// Links [text](url) → <a href="url">text</a>. The URL has already been
+	// HTML-escaped by sanitize above (& → &amp;); only quotes still need
+	// escaping so the double-quoted attribute stays valid.
 	text = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`).ReplaceAllStringFunc(text, func(m string) string {
 		sub := regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`).FindStringSubmatch(m)
 		if len(sub) < 3 {
 			return m
 		}
 		label, url := sub[1], sub[2]
-		url = strings.ReplaceAll(url, "&", "&amp;")
+		url = strings.ReplaceAll(url, `"`, "&quot;")
 		return fmt.Sprintf(`<a href="%s">%s</a>`, url, label)
 	})
 
@@ -130,39 +134,44 @@ func markdownToHTML(text string) string {
 		}
 	}
 
+	// Restore blockquote markers into real tags (post-escape).
+	text = regexp.MustCompile(`\x00BQ\d+\x00`).ReplaceAllString(text, "<blockquote>")
+	text = regexp.MustCompile(`\x00BE\d+\x00`).ReplaceAllString(text, "</blockquote>")
+
 	// Collapse 3+ blank lines to 2.
 	text = regexp.MustCompile(`\n{3,}`).ReplaceAllString(text, "\n\n")
 
 	return strings.TrimSpace(text)
 }
 
-// groupBlockquotes wraps runs of lines starting with "> " in a single
-// <blockquote>...</blockquote>, stripping the marker.
+// groupBlockquotes wraps runs of lines starting with "> " in numbered
+// placeholders (\x00BQ{n}\x00…\x00BE{n}\x00), stripping the marker. The
+// callers restore the placeholders into <blockquote> tags after HTML escaping.
 func groupBlockquotes(text string) string {
 	lines := strings.Split(text, "\n")
 	var out []string
 	inQuote := false
-	flush := func() {
-		if inQuote {
-			out = append(out, "</blockquote>")
-			inQuote = false
-		}
-	}
+	n := 0
 	for _, ln := range lines {
-		trimmed := strings.TrimPrefix(ln, "> ")
 		isQuote := strings.HasPrefix(ln, ">")
 		if isQuote {
 			if !inQuote {
-				out = append(out, "<blockquote>")
+				out = append(out, fmt.Sprintf("\x00BQ%d\x00", n))
+				n++
 				inQuote = true
 			}
-			out = append(out, trimmed)
+			out = append(out, strings.TrimPrefix(ln, "> "))
 		} else {
-			flush()
+			if inQuote {
+				out = append(out, fmt.Sprintf("\x00BE%d\x00", n-1))
+				inQuote = false
+			}
 			out = append(out, ln)
 		}
 	}
-	flush()
+	if inQuote {
+		out = append(out, fmt.Sprintf("\x00BE%d\x00", n-1))
+	}
 	return strings.Join(out, "\n")
 }
 

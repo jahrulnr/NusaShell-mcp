@@ -21,24 +21,24 @@ approval state are persisted locally in SQLite.
 |------|-------------|
 | `login` | Validates token via `getMe`, stores token (file mode 0600) |
 | `logout` | Clears stored token, disconnects |
-| `send_message` | Sends a real message to a Telegram chat |
-| `send_media` | Uploads and sends a file to a Telegram chat |
-| `send_inline_buttons` | Sends a message with inline keyboard buttons |
+| `send_message` | Sends a real message to a Telegram chat; mirrors the message into the local store so the UI shows it instantly |
+| `send_media` | Uploads and sends a file; mirrors the caption/label into the local store |
+| `send_inline_buttons` | Sends a message with inline keyboard buttons; mirrors the text into the local store |
 | `edit_message` | Edits an existing message (text or media) |
 | `delete_message` | Deletes a message from a chat |
-| `answer_callback` | Answers a callback query (approval/deny) |
+| `answer_callback` | Answers a callback query (approval/deny); resolves the matching pending approval in the local store (`approved`/`denied` derived from the notification text) |
 | `send_chat_action` | Sends a typing/uploading indicator |
-| `get_messages` | Reads messages from the local store |
+| `get_messages` | Reads messages from the local store; marks the chat read locally (clears the unread badge — no Telegram call) |
 | `list_chats` | Lists tracked chats from the local store |
 | `list_pending_approvals` | Lists pending approval requests |
 | `get_chat` | Gets chat metadata |
 | `get_chat_history` | Gets the full history of a chat |
 | `request_sync` | Requests history sync (future; Bot API limitation) |
-| `search_messages` | Full-text search across stored messages |
+| `search_messages` | Full-text search across stored messages (FTS5) |
 | `add_to_allowlist` | Adds a user/chat to the allowlist |
 | `remove_from_allowlist` | Removes a user/chat from the allowlist |
-| `status` | Reports bot status, connection state, database counts |
-| `mark_read` | Not applicable — Telegram has no mark-read equivalent |
+| `set_privacy_mode` | Toggles local allowlist enforcement |
+| `status` | Reports bot status, connection state, database counts, and the allowlist |
 
 **All send tools deliver real messages to real people.** Confirm
 the chat and content before sending.

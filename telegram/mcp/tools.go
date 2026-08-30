@@ -41,6 +41,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -128,7 +129,7 @@ func registerTools(s *server.MCPServer, cli Client, store *Store, ingester *Inge
 	), handleGetChat(store))
 
 	s.AddTool(mcp.NewTool(toolGetMessages,
-		mcp.WithDescription("Page through messages in a chat, newest first. Cursor-based pagination — pass the timestamp of the oldest message in the previous page as the cursor for the next page. Omit or 0 for the first page (newest)."),
+		mcp.WithDescription("Page through messages in a chat, newest first. Cursor-based pagination — pass the timestamp of the oldest message in the previous page as the cursor for the next page. Omit or 0 for the first page (newest). Reading marks the chat read in the local store (unread badge clears)."),
 		mcp.WithString("chat_id",
 			mcp.Required(),
 			mcp.Description("Chat to read messages from (int64-as-string or '@username')."),
@@ -280,7 +281,7 @@ func registerTools(s *server.MCPServer, cli Client, store *Store, ingester *Inge
 		mcp.WithBoolean("show_alert",
 			mcp.Description("If true, show as an alert popup (default false)."),
 		),
-	), handleAnswerCallback(cli))
+	), handleAnswerCallback(cli, store))
 
 	s.AddTool(mcp.NewTool(toolSendChatAction,
 		mcp.WithDescription("Show a typing/uploading indicator in the chat for up to 5 seconds. Use before long operations so the user knows the bot is working."),
@@ -348,6 +349,19 @@ func handleStatus(cli Client, store *Store, ingester *Ingester) server.ToolHandl
 		msgCount, _ := store.CountMessages(ctx)
 		chatCount, _ := store.CountChats(ctx)
 		privacyMode, _ := store.GetMeta(ctx, privacyModeMetaKey)
+		allowlist, _ := store.ListAllowlist(ctx)
+		if allowlist == nil {
+			allowlist = []string{}
+		}
+
+		// lastEventAt is 0 (not a year-1 epoch) until the first event lands so
+		// consumers can render "—" instead of a nonsense date.
+		lastEventAt := int64(0)
+		lastEventAgo := 0
+		if t := ingester.LastEventAt(); !t.IsZero() {
+			lastEventAt = t.Unix()
+			lastEventAgo = int(time.Since(t).Seconds())
+		}
 
 		result := map[string]any{
 			"paired":         state.Paired,
@@ -358,8 +372,9 @@ func handleStatus(cli Client, store *Store, ingester *Ingester) server.ToolHandl
 			"privacy_mode":   privacyMode == "1",
 			"message_count":  msgCount,
 			"chat_count":     chatCount,
-			"last_event_at":  ingester.LastEventAt().Unix(),
-			"last_event_ago": int(time.Since(ingester.LastEventAt()).Seconds()),
+			"last_event_at":  lastEventAt,
+			"last_event_ago": lastEventAgo,
+			"allowlist":      allowlist,
 		}
 		switch {
 		case !state.Paired:
@@ -418,6 +433,9 @@ func handleListChats(store *Store) server.ToolHandlerFunc {
 		if err != nil {
 			return errorResult(fmt.Errorf("list chats: %w", err)), nil
 		}
+		if chats == nil {
+			chats = []ChatRow{}
+		}
 		return jsonResult(map[string]any{
 			"chats":  chats,
 			"total":  len(chats),
@@ -462,6 +480,15 @@ func handleGetMessages(store *Store) server.ToolHandlerFunc {
 		messages, err := store.GetMessagesCursor(ctx, chatID, cursor, limit)
 		if err != nil {
 			return errorResult(fmt.Errorf("get messages: %w", err)), nil
+		}
+
+		// Reading a chat clears its unread badge locally. Local-only side
+		// effect (no Telegram API call); keeps the UI honest about read state.
+		if err := store.ResetUnread(ctx, chatID); err != nil {
+			stderr("get messages: reset unread: %s", err)
+		}
+		if messages == nil {
+			messages = []MessageRow{}
 		}
 
 		nextCursor := int64(0)
@@ -518,6 +545,9 @@ func handleSearchMessages(store *Store) server.ToolHandlerFunc {
 				break
 			}
 		}
+		if filtered == nil {
+			filtered = []MessageRow{}
+		}
 		return jsonResult(map[string]any{
 			"messages": filtered,
 			"total":    len(filtered),
@@ -528,6 +558,45 @@ func handleSearchMessages(store *Store) server.ToolHandlerFunc {
 			"limit":    limit,
 		})
 	}
+}
+
+// recordOutbound mirrors a successfully sent message into the local store so
+// the UI and read-side tools see it immediately instead of waiting for the
+// bot's own-message update to arrive via long polling (which the ingester
+// then ignores thanks to INSERT OR IGNORE on the same (chat_id, id) key).
+// Best-effort: a store write failure never fails a successful send.
+func recordOutbound(ctx context.Context, store *Store, chatID string, id int64, text string, ts time.Time) {
+	if store == nil {
+		return
+	}
+	row := MessageRow{
+		ID:         strconv.FormatInt(id, 10),
+		ChatID:     chatID,
+		SenderName: "me",
+		Text:       text,
+		Timestamp:  ts.Unix(),
+		FromMe:     true,
+	}
+	if err := store.InsertMessage(ctx, row); err != nil {
+		stderr("send: mirror outbound message: %s", err)
+	}
+	if err := store.UpsertChat(ctx, chatID, kindForChat(chatID), "", text, ts.Unix()); err != nil {
+		stderr("send: mirror outbound chat: %s", err)
+	}
+}
+
+// kindForChat guesses a chat type label for an outbound send. Telegram does
+// not echo the chat type back in the send result, so we keep any existing
+// row's type ("") — UpsertChat only overwrites type with a non-empty value,
+// which never wipes a previously ingested dm/group/channel classification.
+func kindForChat(chatID string) string {
+	if strings.HasPrefix(chatID, "-100") {
+		return "channel" // supergroups & channels share the -100 prefix
+	}
+	if strings.HasPrefix(chatID, "-") {
+		return "group"
+	}
+	return "" // dm or unknown — "" preserves the stored type on upsert
 }
 
 func handleSendMessage(cli Client, store *Store) server.ToolHandlerFunc {
@@ -567,6 +636,9 @@ func handleSendMessage(cli Client, store *Store) server.ToolHandlerFunc {
 			}
 		}
 
+		// Mirror the full text under the first chunk's id so the UI shows the
+		// sent message instantly and FTS indexes the whole payload.
+		recordOutbound(ctx, store, chatID, first.MessageID, text, first.Timestamp)
 		_ = store.ResetUnread(ctx, chatID)
 
 		return jsonResult(map[string]any{
@@ -606,6 +678,14 @@ func handleSendMedia(cli Client, store *Store) server.ToolHandlerFunc {
 			return errorResult(fmt.Errorf("send media: %w", err)), nil
 		}
 
+		// Mirror the outbound media as a textual row so it appears in the
+		// chat thread immediately; capture the caption (or a filename label)
+		// so the thread stays readable even when Telegram has no caption.
+		label := caption
+		if label == "" {
+			label = "📎 " + filepath.Base(filePath)
+		}
+		recordOutbound(ctx, store, chatID, res.MessageID, label, res.Timestamp)
 		_ = store.ResetUnread(ctx, chatID)
 
 		return jsonResult(map[string]any{
@@ -665,6 +745,7 @@ func handleSendInlineButtons(cli Client, store *Store) server.ToolHandlerFunc {
 			return errorResult(fmt.Errorf("send inline buttons: %w", err)), nil
 		}
 
+		recordOutbound(ctx, store, chatID, res.MessageID, text, res.Timestamp)
 		_ = store.ResetUnread(ctx, chatID)
 
 		return jsonResult(map[string]any{
@@ -724,7 +805,7 @@ func handleDeleteMessage(cli Client) server.ToolHandlerFunc {
 	}
 }
 
-func handleAnswerCallback(cli Client) server.ToolHandlerFunc {
+func handleAnswerCallback(cli Client, store *Store) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 		callbackQueryID := argString(args, "callback_query_id")
@@ -734,10 +815,36 @@ func handleAnswerCallback(cli Client) server.ToolHandlerFunc {
 		text := argString(args, "text")
 		showAlert := argBool(args, "show_alert")
 
+		// Answer first so the button stops loading even if the local resolve
+		// below fails — the user already got their acknowledgement.
 		if err := cli.AnswerCallback(ctx, callbackQueryID, text, showAlert); err != nil {
 			return errorResult(fmt.Errorf("answer callback: %w", err)), nil
 		}
-		return jsonResult(map[string]any{"status": "ok", "callback_query_id": callbackQueryID})
+
+		// Resolve the matching pending approval locally: derive the outcome
+		// from the notification text so approve/deny verbs map to statuses.
+		// This mirrors FakeClient.AnswerCallback so mock and real modes stay
+		// consistent, and keeps list_pending_approvals honest after the
+		// decision. A missing approval row is not an error (e.g. callback
+		// answered for a message whose press predates the store or was
+		// already resolved).
+		status := "approved"
+		hay := strings.ToLower(text)
+		for _, neg := range []string{"deny", "denied", "reject", "cancel", "no "} {
+			if strings.Contains(hay, neg) {
+				status = "denied"
+				break
+			}
+		}
+		if store != nil {
+			_ = store.UpdateApprovalStatus(ctx, callbackQueryID, status)
+		}
+
+		return jsonResult(map[string]any{
+			"status":           "ok",
+			"callback_query_id": callbackQueryID,
+			"resolution":       status,
+		})
 	}
 }
 
@@ -765,6 +872,9 @@ func handleListPendingApprovals(store *Store) server.ToolHandlerFunc {
 		approvals, err := store.ListPendingApprovals(ctx)
 		if err != nil {
 			return errorResult(fmt.Errorf("list pending approvals: %w", err)), nil
+		}
+		if approvals == nil {
+			approvals = []ApprovalRow{}
 		}
 		return jsonResult(map[string]any{
 			"approvals": approvals,
@@ -809,6 +919,9 @@ func handleGetChatHistory(store *Store) server.ToolHandlerFunc {
 		messages, err := store.GetChatHistory(ctx, chatID)
 		if err != nil {
 			return errorResult(fmt.Errorf("get chat history: %w", err)), nil
+		}
+		if messages == nil {
+			messages = []MessageRow{}
 		}
 
 		// Include a human-readable preview alongside the raw rows so the LLM

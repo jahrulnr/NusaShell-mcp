@@ -16,6 +16,7 @@ manifest.json + ui/ + mcp/      # plugin with a window (UI + MCP)
 | `kanban/` | Kanban board with project/column/ticket management |
 | `notes/` | Simple notes app |
 | `whatsapp/` | WhatsApp bridge — link your account, read/send messages via MCP |
+| `telegram/` | Telegram bridge — link a bot (Bot API), read/send messages, approvals, FTS search |
 
 ## Architecture
 
@@ -24,6 +25,7 @@ mcpkit/              # shared Go module (config, stdio transport, data-file reso
 notes/mcp/           # notes MCP server (Go)
 kanban/mcp/          # kanban MCP server (Go)
 whatsapp/mcp/        # whatsapp MCP server (Go, whatsmeow)
+telegram/mcp/        # telegram MCP server (Go, mymrac/telego)
 ```
 
 Each plugin's `mcp/` folder is an independent Go module that depends on
@@ -39,6 +41,7 @@ folder:
 cd notes/mcp && go build -o server .
 cd kanban/mcp && go build -o server .
 cd whatsapp/mcp && go build -o server .
+cd telegram/mcp && go build -o server .
 ```
 
 The resulting `mcp/server` binary is what `manifest.json` launches
@@ -47,7 +50,7 @@ The resulting `mcp/server` binary is what `manifest.json` launches
 ### Build all
 
 ```bash
-for p in notes kanban whatsapp; do
+for p in notes kanban whatsapp telegram; do
   (cd "$p/mcp" && go build -o server .)
 done
 ```
@@ -58,6 +61,7 @@ done
 cd notes/mcp && go test ./...
 cd kanban/mcp && go test ./...
 cd whatsapp/mcp && go test ./...
+cd telegram/mcp && go test ./...
 ```
 
 ## Smoke test

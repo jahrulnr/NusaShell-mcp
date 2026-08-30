@@ -138,31 +138,12 @@ func (c *BotClient) connectWithToken(ctx context.Context, token string) error {
 
 // startWithBot begins long polling with an already-validated bot, resuming
 // from the persisted update_id watermark (offset = last_update_id + 1) so no
-// updates are missed or replayed across restarts.
+// updates are missed or replayed across restarts. The polling loop runs in a
+// goroutine and reconnects itself with backoff when the stream drops, so a
+// transient network failure can never leave the bot stuck in a dead
+// "connected" state.
 func (c *BotClient) startWithBot(ctx context.Context, bot *telego.Bot, me *telego.User) error {
-	offset := 0
-	if c.store != nil {
-		if v, _ := c.store.GetMeta(context.Background(), watermarkKey); v != "" {
-			if n, err := strconv.Atoi(v); err == nil {
-				offset = n + 1
-			}
-		}
-	}
-
 	pollCtx, pollStop := context.WithCancel(context.Background())
-	updates, err := bot.UpdatesViaLongPolling(pollCtx, &telego.GetUpdatesParams{
-		Offset:  offset,
-		Timeout: 25,
-		AllowedUpdates: []string{
-			"message", "edited_message",
-			"channel_post", "edited_channel_post",
-			"callback_query",
-		},
-	})
-	if err != nil {
-		pollStop()
-		return fmt.Errorf("start long polling: %w", err)
-	}
 
 	c.mu.Lock()
 	c.bot = bot
@@ -176,8 +157,88 @@ func (c *BotClient) startWithBot(ctx context.Context, bot *telego.Bot, me *teleg
 	}
 	c.mu.Unlock()
 
-	go c.pump(updates)
+	go c.pollLoop(pollCtx, bot)
 	return nil
+}
+
+// pollLoop runs the long-polling getUpdates stream, draining updates via pump
+// and restarting the stream with exponential backoff whenever it drops or
+// errors. It exits only when pollCtx is cancelled (Disconnect/Logout).
+func (c *BotClient) pollLoop(pollCtx context.Context, bot *telego.Bot) {
+	backoff := time.Second
+	for {
+		if pollCtx.Err() != nil {
+			return
+		}
+		updates, err := bot.UpdatesViaLongPolling(pollCtx, &telego.GetUpdatesParams{
+			Offset:  c.nextUpdateOffset(),
+			Timeout: 25,
+			AllowedUpdates: []string{
+				"message", "edited_message",
+				"channel_post", "edited_channel_post",
+				"callback_query",
+			},
+		})
+		if err != nil {
+			if pollCtx.Err() != nil {
+				return
+			}
+			c.setConnected(false)
+			stderr("long polling error: %s — reconnecting in %s", err, backoff)
+		} else {
+			c.setConnected(true)
+			backoff = time.Second
+			c.pump(updates)
+			if pollCtx.Err() != nil {
+				return
+			}
+			c.setConnected(false)
+			stderr("long polling stream closed — reconnecting in %s", backoff)
+		}
+		if !sleepCtx(pollCtx, backoff) {
+			return
+		}
+		if backoff < 30*time.Second {
+			backoff *= 2
+		}
+	}
+}
+
+// nextUpdateOffset returns the getUpdates offset to resume from: the last
+// ingested update_id + 1. Zero starts from the newest updates.
+func (c *BotClient) nextUpdateOffset() int {
+	if c.store == nil {
+		return 0
+	}
+	v, _ := c.store.GetMeta(context.Background(), watermarkKey)
+	if v == "" {
+		return 0
+	}
+	if n, err := strconv.Atoi(v); err == nil {
+		return n + 1
+	}
+	return 0
+}
+
+// setConnected updates the connection state under lock. Tools read it to fail
+// fast with ErrNotConnected (a retryable error) while polling is down.
+func (c *BotClient) setConnected(v bool) {
+	c.mu.Lock()
+	c.state.Connected = v
+	c.mu.Unlock()
+}
+
+// sleepCtx sleeps for d unless ctx is cancelled first. Returns false when
+// cancelled.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
 }
 
 // Disconnect stops long polling cleanly. The event channel is left open so the
@@ -245,25 +306,25 @@ func (c *BotClient) SendMedia(ctx context.Context, chatID, filePath, kind, capti
 
 	switch strings.ToLower(kind) {
 	case "photo":
-		msg, err := bot.SendPhoto(ctx, &telego.SendPhotoParams{ChatID: cid, Photo: file, Caption: caption, ReplyParameters: reply})
+		msg, err := bot.SendPhoto(ctx, &telego.SendPhotoParams{ChatID: cid, Photo: file, Caption: caption, ParseMode: "HTML", ReplyParameters: reply})
 		if err != nil {
 			return SendResult{}, err
 		}
 		return sendResult(msg), nil
 	case "video":
-		msg, err := bot.SendVideo(ctx, &telego.SendVideoParams{ChatID: cid, Video: file, Caption: caption, ReplyParameters: reply})
+		msg, err := bot.SendVideo(ctx, &telego.SendVideoParams{ChatID: cid, Video: file, Caption: caption, ParseMode: "HTML", ReplyParameters: reply})
 		if err != nil {
 			return SendResult{}, err
 		}
 		return sendResult(msg), nil
 	case "audio":
-		msg, err := bot.SendAudio(ctx, &telego.SendAudioParams{ChatID: cid, Audio: file, Caption: caption, ReplyParameters: reply})
+		msg, err := bot.SendAudio(ctx, &telego.SendAudioParams{ChatID: cid, Audio: file, Caption: caption, ParseMode: "HTML", ReplyParameters: reply})
 		if err != nil {
 			return SendResult{}, err
 		}
 		return sendResult(msg), nil
 	default: // "document"
-		msg, err := bot.SendDocument(ctx, &telego.SendDocumentParams{ChatID: cid, Document: file, Caption: caption, ReplyParameters: reply})
+		msg, err := bot.SendDocument(ctx, &telego.SendDocumentParams{ChatID: cid, Document: file, Caption: caption, ParseMode: "HTML", ReplyParameters: reply})
 		if err != nil {
 			return SendResult{}, err
 		}
