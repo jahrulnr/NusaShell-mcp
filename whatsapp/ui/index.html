@@ -16,15 +16,59 @@
           <h2>Link WhatsApp</h2>
         </div>
         <p class="login-desc">
-          Scan the QR code with your phone to link your WhatsApp account.
+          Scan the QR code with your phone, or sign in with a phone-number pairing code instead.
         </p>
-        <div id="qrContainer" class="qr-container">
-          <div class="qr-placeholder">Click "Get QR Code" to start</div>
+
+        <!-- Pairing mode tabs -->
+        <div class="login-tabs" role="tablist">
+          <button id="tabQr" class="login-tab active" role="tab" aria-selected="true">QR Code</button>
+          <button id="tabCode" class="login-tab" role="tab" aria-selected="false">Phone Code</button>
         </div>
-        <div class="login-actions">
-          <button id="getQrBtn" class="btn-primary">Get QR Code</button>
-          <button id="refreshQrBtn" class="btn-secondary" style="display:none">Refresh QR</button>
+
+        <!-- QR mode panel -->
+        <div id="qrPanel" class="login-panel-body">
+          <div id="qrContainer" class="qr-container">
+            <div class="qr-placeholder">Click "Get QR Code" to start</div>
+          </div>
+          <div class="login-actions">
+            <button id="getQrBtn" class="btn-primary">Get QR Code</button>
+            <button id="refreshQrBtn" class="btn-secondary" style="display:none">Refresh QR</button>
+          </div>
         </div>
+
+        <!-- Pair-code mode panel -->
+        <div id="codePanel" class="login-panel-body" style="display:none">
+          <div class="code-form">
+            <label class="code-label" for="phoneInput">Phone number</label>
+            <input
+              id="phoneInput"
+              type="tel"
+              class="code-input"
+              placeholder="+62 812-3456-7890 or 081234567890"
+              autocomplete="tel"
+              inputmode="tel"
+            />
+            <div class="code-hint">
+              Enter your number in any common format. Default country code is +62 (Indonesia).
+            </div>
+          </div>
+          <div id="codeContainer" class="code-container" style="display:none">
+            <div class="code-label-inline">Pairing code</div>
+            <div id="codeDisplay" class="code-display">----</div>
+            <div class="code-expires">Expires in <span id="codeCountdown">--</span>s</div>
+            <div class="code-hint">
+              Open WhatsApp on your phone → Settings → Linked Devices → <strong>Link with phone number</strong>, then enter the code above.
+            </div>
+            <div class="code-warn" id="codeWarn" style="display:none">
+              If the option "Link with phone number" is missing on your phone, this method is unavailable for your account — fall back to QR.
+            </div>
+          </div>
+          <div class="login-actions">
+            <button id="getCodeBtn" class="btn-primary">Get Pairing Code</button>
+            <button id="refreshCodeBtn" class="btn-secondary" style="display:none">New Code</button>
+          </div>
+        </div>
+
         <div id="loginStatus" class="login-status"></div>
       </div>
     </div>
