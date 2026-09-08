@@ -11,15 +11,58 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mymmrac/telego"
+
+	"github.com/jahrulnr/NusaShell-mcp/mcpkit"
 )
 
 // --- environment / diagnostics --------------------------------------------
 
-// notificationMessageMethod is the MCP server→client notification method this
-// plugin pushes to the host after an inbound message is stored. The host maps
-// it to a domain event of type "<short-plugin-id>.message" (e.g.
-// "telegram.message") so when-triggered automation can react without polling.
-const notificationMessageMethod = "notifications/message"
+// notificationEventType is the stable domain event type consumed by
+// when-triggered automations. The host owns the source identity.
+const notificationEventType = "telegram.message"
+
+// inboundEventParams builds the generic NusaShell business-event envelope for
+// an inbound Telegram message. The event ID remains stable when Telegram
+// retries an update, which lets the host deduplicate deliveries.
+func inboundEventParams(ev TelegramEvent) map[string]any {
+	subject := ev.SenderName()
+	if subject == "" {
+		subject = ev.ChatName()
+	}
+	if subject == "" {
+		subject = ev.ChatID()
+	}
+
+	text := truncateText(ev.Text(), 200)
+	attributes := map[string]any{
+		"chat_id":         ev.ChatID(),
+		"message_id":      ev.MessageID(),
+		"chat_type":       ev.ChatType(),
+		"sender_id":       ev.SenderID(),
+		"sender_username": ev.SenderUsername(),
+		"sender_name":     ev.SenderName(),
+		"text":            text,
+		"from_me":         ev.FromMe(),
+	}
+	data := map[string]any{
+		"chat_id":    ev.ChatID(),
+		"message_id": ev.MessageID(),
+		"text":       text,
+	}
+
+	occurredAt := time.Time{}
+	if ev.Timestamp > 0 {
+		occurredAt = time.Unix(ev.Timestamp, 0).UTC()
+	}
+	return mcpkit.BusinessEventParams(
+		"message:"+ev.ChatID()+":"+ev.MessageID(),
+		notificationEventType,
+		occurredAt,
+		subject,
+		attributes,
+		data,
+	)
+}
 
 // truncateText returns text limited to max runes. Used to keep push
 // notification payloads bounded (the full text stays in the local store).
@@ -31,7 +74,10 @@ func truncateText(text string, max int) string {
 	if len(r) <= max {
 		return text
 	}
-	return string(r[:max]) + "…"
+	if max == 1 {
+		return "…"
+	}
+	return string(r[:max-1]) + "…"
 }
 
 // isVerbose reports whether TELEGRAM_VERBOSE is set to a truthy value.

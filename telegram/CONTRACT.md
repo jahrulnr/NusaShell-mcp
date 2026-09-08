@@ -40,14 +40,18 @@ approval state are persisted locally in SQLite.
 | `set_privacy_mode` | Toggles local allowlist enforcement |
 | `status` | Reports bot status, connection state, database counts, the allowlist, and `unread_dm_count` (direct-message chats with unread messages — a scalar for automation gates) |
 
-**Push notifications.** After any inbound (non-bot) message is stored, the
-plugin emits an MCP **server→client notification** `notifications/message`
-with params `{plugin, event: "message", chat_id, message_id, chat_type,
-subject, text (≤200 chars), from_me: false}`. The host translates it into a
-`telegram.message` domain event for when-triggered automation, deduped per
-`(chat_id, message_id)`. Outbound (bot) messages never notify. For mock mode
-(`MOCK_ENABLED=1`) no notifications are emitted (the fake client has no live
-ingestion).
+**Business-event notifications.** After a newly received inbound message is
+persisted, the plugin emits the NusaShell business-event notification
+`notifications/nusashell/event`. The envelope has `schema_version: 1`, a stable
+`event_id` in the form `message:<chat_id>:<message_id>`, and `type:
+telegram.message`. It includes the Telegram timestamp as `occurred_at`, a
+sender/chat `subject`, and an `attributes` object containing `chat_id`,
+`message_id`, `chat_type`, `sender_id`, `sender_username`, `sender_name`,
+`text` (at most 200 Unicode characters), and `from_me`. The `data` object
+contains the bounded text and message identity. The host assigns `source`,
+adds the normalized event id, and deduplicates deliveries. Outbound bot
+messages and duplicate updates never emit an event. This replaces the legacy
+`notifications/message` bridge for this plugin.
 
 **All send tools deliver real messages to real people.** Confirm
 the chat and content before sending.

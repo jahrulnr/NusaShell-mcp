@@ -21,7 +21,17 @@ import (
 
 // maxMessageLen is WhatsApp's practical per-message length limit.
 // Longer sends are rejected by the server — chunk at this size.
-const maxMessageLen = 4096
+const (
+	maxMessageLen  = 4096
+	pairingTimeout = 3 * time.Minute
+)
+
+// newPairingContext deliberately does not inherit an MCP request context.
+// A login tool returns after showing one QR/code, while the WhatsApp pairing
+// session must remain alive until the user completes it or it expires.
+func newPairingContext(_ context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), pairingTimeout)
+}
 
 // WhatsmeowClient implements Client using the whatsmeow library.
 type WhatsmeowClient struct {
@@ -35,7 +45,9 @@ type WhatsmeowClient struct {
 
 	// eventCh is the single channel the ingester drains. whatsmeow's
 	// AddEventHandler callback pushes normalized events onto it.
-	eventCh chan any
+	eventCh   chan any
+	done      chan struct{}
+	closeOnce sync.Once
 
 	// state is protected by mu.
 	state PairState
@@ -55,7 +67,8 @@ func NewWhatsmeowClient(dataDir string, verbose bool) *WhatsmeowClient {
 	return &WhatsmeowClient{
 		dataDir: dataDir,
 		log:     waLog.Stdout("whatsmeow", level, true),
-		eventCh: make(chan any, 256),
+		eventCh: make(chan any, 2048),
+		done:    make(chan struct{}),
 	}
 }
 
@@ -94,12 +107,18 @@ func sessionDSN(dataDir string) string {
 		filepath.ToSlash(filepath.Join(dataDir, "session.db")))
 }
 
-// Close closes the whatsmeow session database connection. Call this in
-// tests to release the SQLite file lock so t.TempDir() cleanup can
-// remove the directory on Windows.
+// Close stops pairing, disconnects the socket, and closes the whatsmeow
+// session database. It is safe to call more than once.
 func (w *WhatsmeowClient) Close() error {
+	w.Disconnect()
+	w.closeOnce.Do(func() { close(w.done) })
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if w.container != nil {
-		return w.container.Close()
+		err := w.container.Close()
+		w.container = nil
+		w.device = nil
+		return err
 	}
 	return nil
 }
@@ -123,29 +142,64 @@ func (w *WhatsmeowClient) State() PairState {
 	return w.state
 }
 
+// connectionAttemptStarted records the durable pairing identity, but not a
+// ready connection. ConnectContext returning only means the websocket start
+// was initiated; WhatsApp emits events.Connected after authentication.
+func (w *WhatsmeowClient) connectionAttemptStarted(deviceJID string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.state.Paired = true
+	w.state.DeviceJID = deviceJID
+	w.state.TransportConnected = false
+	w.state.Connected = false
+}
+
+func (w *WhatsmeowClient) authenticatedConnectionEstablished() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.state.TransportConnected = true
+	w.state.Connected = true
+	w.state.AwaitingQR = false
+	if w.client != nil && w.client.Store.ID != nil {
+		w.state.Paired = true
+		w.state.DeviceJID = w.client.Store.ID.String()
+	}
+}
+
+func (w *WhatsmeowClient) readyClient() *whatsmeow.Client {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.state.Connected {
+		return nil
+	}
+	return w.client
+}
+
 // Connect brings the socket up using stored credentials.
 func (w *WhatsmeowClient) Connect(ctx context.Context) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-
 	if w.client == nil {
 		if err := w.initStore(ctx); err != nil {
+			w.mu.Unlock()
 			return err
 		}
 		w.newClient()
 	}
-
 	if w.client.Store.ID == nil {
 		w.state.AwaitingQR = false
+		w.mu.Unlock()
 		return ErrNotPaired
 	}
+	client := w.client
+	deviceJID := client.Store.ID.String()
+	w.mu.Unlock()
 
-	if err := w.client.Connect(); err != nil {
+	// A successful websocket start is not authenticated readiness. Keep sends
+	// disabled until the events.Connected callback confirms authentication.
+	w.connectionAttemptStarted(deviceJID)
+	if err := client.ConnectContext(ctx); err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
-	w.state.Paired = true
-	w.state.Connected = true
-	w.state.DeviceJID = w.client.Store.ID.String()
 	return nil
 }
 
@@ -166,7 +220,7 @@ func (w *WhatsmeowClient) StartQR(ctx context.Context) (<-chan QRCode, error) {
 	if w.qrCxl != nil {
 		w.qrCxl()
 	}
-	qrCtx, cancel := context.WithCancel(ctx)
+	qrCtx, cancel := newPairingContext(ctx)
 	w.qrCtx = qrCtx
 	w.qrCxl = cancel
 	w.state.AwaitingQR = true
@@ -179,13 +233,13 @@ func (w *WhatsmeowClient) StartQR(ctx context.Context) (<-chan QRCode, error) {
 		return nil, fmt.Errorf("get qr channel: %w", err)
 	}
 
-	if err := w.client.Connect(); err != nil {
+	if err := w.client.ConnectContext(qrCtx); err != nil {
 		cancel()
 		w.state.AwaitingQR = false
 		return nil, fmt.Errorf("connect for qr: %w", err)
 	}
 
-		out := make(chan QRCode, 8)
+	out := make(chan QRCode, 8)
 	go func() {
 		defer close(out)
 		for {
@@ -241,7 +295,7 @@ func (w *WhatsmeowClient) StartPairCode(ctx context.Context, phone string) (<-ch
 	if w.qrCxl != nil {
 		w.qrCxl()
 	}
-	pairCtx, cancel := context.WithCancel(ctx)
+	pairCtx, cancel := newPairingContext(ctx)
 	w.qrCtx = pairCtx
 	w.qrCxl = cancel
 	w.state.AwaitingQR = true
@@ -255,7 +309,7 @@ func (w *WhatsmeowClient) StartPairCode(ctx context.Context, phone string) (<-ch
 		w.state.AwaitingQR = false
 		return nil, fmt.Errorf("get qr channel: %w", err)
 	}
-	if err := w.client.Connect(); err != nil {
+	if err := w.client.ConnectContext(pairCtx); err != nil {
 		cancel()
 		w.state.AwaitingQR = false
 		return nil, fmt.Errorf("connect for pair code: %w", err)
@@ -291,7 +345,7 @@ func (w *WhatsmeowClient) StartPairCode(ctx context.Context, phone string) (<-ch
 	code, err := w.client.PairPhone(
 		pairCtx,
 		phone,
-		true,                    // showPushNotification — match WhatsApp Web behaviour
+		true, // showPushNotification — match WhatsApp Web behaviour
 		whatsmeow.PairClientChrome,
 		"Chrome (Linux)",
 	)
@@ -333,29 +387,47 @@ func (w *WhatsmeowClient) StartPairCode(ctx context.Context, phone string) (<-ch
 // Disconnect closes the socket cleanly.
 func (w *WhatsmeowClient) Disconnect() {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if w.qrCxl != nil {
 		w.qrCxl()
 		w.qrCxl = nil
 	}
-	if w.client != nil {
-		w.client.Disconnect()
-	}
+	client := w.client
+	w.state.TransportConnected = false
 	w.state.Connected = false
+	w.mu.Unlock()
+	if client != nil {
+		client.Disconnect()
+	}
 }
 
-// Logout disconnects and clears stored credentials.
+// Logout unlinks this device while its authenticated socket is still usable,
+// then disconnects and discards the local session. Disconnecting first makes
+// WhatsApp's unlink request impossible to deliver.
 func (w *WhatsmeowClient) Logout(ctx context.Context) error {
 	w.mu.Lock()
-	if w.client != nil {
-		w.client.Disconnect()
-		if w.client.Store.ID != nil {
-			if err := w.client.Logout(ctx); err != nil {
-				w.mu.Unlock()
-				return fmt.Errorf("logout: %w", err)
-			}
+	client := w.client
+	container := w.container
+	if w.qrCxl != nil {
+		w.qrCxl()
+		w.qrCxl = nil
+	}
+	w.mu.Unlock()
+
+	if client != nil && client.Store.ID != nil {
+		if err := client.Logout(ctx); err != nil {
+			return fmt.Errorf("logout: %w", err)
 		}
 	}
+	if client != nil {
+		client.Disconnect()
+	}
+	if container != nil {
+		if err := container.Close(); err != nil {
+			return fmt.Errorf("close session store: %w", err)
+		}
+	}
+
+	w.mu.Lock()
 	w.state = PairState{}
 	w.client = nil
 	w.device = nil
@@ -370,10 +442,8 @@ func (w *WhatsmeowClient) Logout(ctx context.Context) error {
 // formatting and long text is chunked at 4096 chars (WhatsApp's practical
 // limit); only the first chunk carries the reply quote.
 func (w *WhatsmeowClient) SendText(ctx context.Context, chatJID, text, replyToID string) (SendResult, error) {
-	w.mu.Lock()
-	client := w.client
-	w.mu.Unlock()
-	if client == nil || !client.IsConnected() {
+	client := w.readyClient()
+	if client == nil {
 		return SendResult{}, ErrNotConnected
 	}
 
@@ -406,10 +476,8 @@ func (w *WhatsmeowClient) SendText(ctx context.Context, chatJID, text, replyToID
 
 // SendMedia uploads bytes and sends a media message.
 func (w *WhatsmeowClient) SendMedia(ctx context.Context, chatJID, kind string, data []byte, mimeType, caption, replyToID string) (SendResult, error) {
-	w.mu.Lock()
-	client := w.client
-	w.mu.Unlock()
-	if client == nil || !client.IsConnected() {
+	client := w.readyClient()
+	if client == nil {
 		return SendResult{}, ErrNotConnected
 	}
 
@@ -428,7 +496,7 @@ func (w *WhatsmeowClient) SendMedia(ctx context.Context, chatJID, kind string, d
 		caption = markdownToWhatsApp(caption)
 	}
 
-	msg := buildMediaMessage(kind, uploaded, mimeType, caption)
+	msg := buildMediaMessage(kind, uploaded, mimeType, caption, replyToID, jid)
 	if msg == nil {
 		return SendResult{}, fmt.Errorf("unsupported media kind: %s", kind)
 	}
@@ -442,10 +510,8 @@ func (w *WhatsmeowClient) SendMedia(ctx context.Context, chatJID, kind string, d
 
 // React adds or removes a reaction.
 func (w *WhatsmeowClient) React(ctx context.Context, chatJID, messageID, emoji string) error {
-	w.mu.Lock()
-	client := w.client
-	w.mu.Unlock()
-	if client == nil || !client.IsConnected() {
+	client := w.readyClient()
+	if client == nil {
 		return ErrNotConnected
 	}
 
@@ -469,10 +535,8 @@ func (w *WhatsmeowClient) React(ctx context.Context, chatJID, messageID, emoji s
 
 // MarkRead marks a chat read.
 func (w *WhatsmeowClient) MarkRead(ctx context.Context, chatJID, upToMessageID string) error {
-	w.mu.Lock()
-	client := w.client
-	w.mu.Unlock()
-	if client == nil || !client.IsConnected() {
+	client := w.readyClient()
+	if client == nil {
 		return ErrNotConnected
 	}
 
@@ -493,10 +557,8 @@ func (w *WhatsmeowClient) MarkRead(ctx context.Context, chatJID, upToMessageID s
 // Download fetches an encrypted media blob. The downloadRef is the base64-
 // encoded serialized *waE2E.Message with the media info.
 func (w *WhatsmeowClient) Download(ctx context.Context, downloadRef string) (DownloadResult, error) {
-	w.mu.Lock()
-	client := w.client
-	w.mu.Unlock()
-	if client == nil || !client.IsConnected() {
+	client := w.readyClient()
+	if client == nil {
 		return DownloadResult{}, ErrNotConnected
 	}
 
@@ -527,10 +589,8 @@ func (w *WhatsmeowClient) Download(ctx context.Context, downloadRef string) (Dow
 // message we already have, so the server streams the preceding messages as
 // an events.HistorySync blob.
 func (w *WhatsmeowClient) RequestSync(ctx context.Context, chatJID string) error {
-	w.mu.Lock()
-	client := w.client
-	w.mu.Unlock()
-	if client == nil || !client.IsConnected() {
+	client := w.readyClient()
+	if client == nil {
 		return ErrNotConnected
 	}
 
@@ -578,16 +638,10 @@ func (w *WhatsmeowClient) handleEvent(raw any) {
 	case *events.GroupInfo:
 		w.translateGroupInfo(evt)
 	case *events.Connected:
-		w.mu.Lock()
-		w.state.Connected = true
-		w.state.AwaitingQR = false
-		if w.client != nil && w.client.Store.ID != nil {
-			w.state.Paired = true
-			w.state.DeviceJID = w.client.Store.ID.String()
-		}
-		w.mu.Unlock()
+		w.authenticatedConnectionEstablished()
 	case *events.Disconnected:
 		w.mu.Lock()
+		w.state.TransportConnected = false
 		w.state.Connected = false
 		w.mu.Unlock()
 	case *events.PairSuccess:
@@ -826,50 +880,56 @@ func (w *WhatsmeowClient) translateGroupInfo(e *events.GroupInfo) {
 		ownerJID = e.Sender.String()
 	}
 
-	// Build participant list from Join + Promote (these are the users present).
-	// This is a delta, not a full roster — the ingester upserts.
-	participants := make([]EventGroupParticipant, 0)
+	// Build exact membership deltas. A GroupInfo event never carries a full
+	// roster, so consumers must apply these incrementally.
+	joined := make([]EventGroupParticipant, 0, len(e.Join))
 	for _, jid := range e.Join {
-		participants = append(participants, EventGroupParticipant{
+		joined = append(joined, EventGroupParticipant{
 			JID:      jid.String(),
 			JoinedAt: e.Timestamp,
 		})
 	}
+	left := make([]string, 0, len(e.Leave))
+	for _, jid := range e.Leave {
+		left = append(left, jid.String())
+	}
+	promoted := make([]string, 0, len(e.Promote))
 	for _, jid := range e.Promote {
-		participants = append(participants, EventGroupParticipant{
-			JID:      jid.String(),
-			IsAdmin:  true,
-			JoinedAt: e.Timestamp,
-		})
+		promoted = append(promoted, jid.String())
+	}
+	demoted := make([]string, 0, len(e.Demote))
+	for _, jid := range e.Demote {
+		demoted = append(demoted, jid.String())
 	}
 
 	w.pushEvent(EventGroupInfo{
-		JID:          e.JID.String(),
-		Name:         name,
-		Topic:        topic,
-		OwnerJID:     ownerJID,
-		UpdatedAt:    e.Timestamp,
-		Participants: participants,
+		JID:       e.JID.String(),
+		Name:      name,
+		Topic:     topic,
+		OwnerJID:  ownerJID,
+		UpdatedAt: e.Timestamp,
+		Joined:    joined,
+		Left:      left,
+		Promoted:  promoted,
+		Demoted:   demoted,
 	})
 }
 
 func (w *WhatsmeowClient) pushEvent(ev any) {
 	select {
 	case w.eventCh <- ev:
+		return
 	default:
-		// Channel full — drop the oldest event to make room. This is lossy
-		// but keeps the whatsmeow event loop from blocking; log so the
-		// drop is visible instead of silently vanishing messages.
-		select {
-		case dropped := <-w.eventCh:
-			w.log.Errorf("event channel full — dropped oldest event %T", dropped)
-		default:
-		}
-		select {
-		case w.eventCh <- ev:
-		default:
-			w.log.Errorf("event channel full — dropped new event %T", ev)
-		}
+		// Keep Whatsmeow's event handler responsive without deleting either
+		// the oldest or newest normalized event. The deferred send preserves
+		// FIFO order behind the buffered events and ends during shutdown.
+		w.log.Warnf("event channel full; deferring event %T", ev)
+		go func() {
+			select {
+			case w.eventCh <- ev:
+			case <-w.done:
+			}
+		}()
 	}
 }
 

@@ -32,6 +32,8 @@ const (
 	toolSearchMsgs    = "search_messages"
 	toolDownloadMedia = "download_media"
 	toolRequestSync   = "request_sync"
+
+	maxSendMediaBytes int64 = 50 << 20
 )
 
 // registerTools wires all MCP tools onto the server.
@@ -59,8 +61,8 @@ func registerTools(s *server.MCPServer, cli Client, store *Store, ingester *Inge
 	s.AddTool(mcp.NewTool(toolListChats,
 		mcp.WithDescription("List recent WhatsApp chats, newest activity first. Each chat carries its JID, kind (dm/group), name, last message preview, and unread count."),
 		mcp.WithString("kind",
-			mcp.Description("Filter by chat kind: 'dm' or 'group'. Omit for all."),
-			mcp.Enum("dm", "group"),
+			mcp.Description("Filter by chat kind: 'dm', 'group', or 'channel'. Omit for all."),
+			mcp.Enum("dm", "group", "channel"),
 		),
 		mcp.WithNumber("limit",
 			mcp.Description("Max chats to return (default 50, max 200)."),
@@ -110,7 +112,7 @@ func registerTools(s *server.MCPServer, cli Client, store *Store, ingester *Inge
 		),
 		mcp.WithString("text",
 			mcp.Required(),
-			mcp.Description("Message text. Markdown is NOT converted — write plain text."),
+			mcp.Description("Message text. Markdown is converted to WhatsApp formatting before delivery."),
 			mcp.MaxLength(65536),
 		),
 		mcp.WithString("reply_to_id",
@@ -119,7 +121,7 @@ func registerTools(s *server.MCPServer, cli Client, store *Store, ingester *Inge
 	), handleSendMessage(cli, store))
 
 	s.AddTool(mcp.NewTool(toolSendMedia,
-		mcp.WithDescription("Send a file from disk as a WhatsApp attachment. Kind is inferred from MIME type or filename if omitted. Images appear as photos, videos play inline, audio sends as voice, other files arrive as documents. Caption markdown is converted to WhatsApp formatting."),
+		mcp.WithDescription("Send a regular file from disk as a WhatsApp attachment (maximum 50 MiB). Kind is inferred from MIME type or filename if omitted. Images appear as photos, videos play inline, audio sends as voice, other files arrive as documents. Caption markdown is converted to WhatsApp formatting."),
 		mcp.WithString("chat_jid",
 			mcp.Required(),
 			mcp.Description("Target chat JID."),
@@ -231,6 +233,39 @@ func registerTools(s *server.MCPServer, cli Client, store *Store, ingester *Inge
 
 // --- Handlers ---
 
+// outboundDeliveryState reflects what whatsmeow's SendMessage confirms: the
+// WhatsApp server accepted the send. It is not a recipient delivery/read receipt.
+func outboundDeliveryState() string { return "server_acknowledged" }
+
+func eventFreshness(at time.Time) (int64, int) {
+	if at.IsZero() {
+		return 0, 0
+	}
+	ago := int(time.Since(at).Seconds())
+	if ago < 0 {
+		ago = 0
+	}
+	return at.Unix(), ago
+}
+
+func clampPagination(limit, offset int) (int, int) {
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return limit, offset
+}
+
+func clampLimit(limit int) int {
+	limit, _ = clampPagination(limit, 0)
+	return limit
+}
+
 func handleStatus(cli Client, store *Store, ingester *Ingester) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		state := cli.State()
@@ -238,16 +273,18 @@ func handleStatus(cli Client, store *Store, ingester *Ingester) server.ToolHandl
 		chatCount, _ := store.CountChats(ctx)
 		contactCount, _ := store.CountContacts(ctx)
 
+		lastEventAt, lastEventAgo := eventFreshness(ingester.LastEventAt())
 		result := map[string]any{
-			"paired":         state.Paired,
-			"connected":      state.Connected,
-			"device_jid":     state.DeviceJID,
-			"awaiting_qr":    state.AwaitingQR,
-			"message_count":  msgCount,
-			"chat_count":     chatCount,
-			"contact_count":  contactCount,
-			"last_event_at":  ingester.LastEventAt().Unix(),
-			"last_event_ago": int(time.Since(ingester.LastEventAt()).Seconds()),
+			"paired":              state.Paired,
+			"transport_connected": state.TransportConnected,
+			"connected":           state.Connected,
+			"device_jid":          state.DeviceJID,
+			"awaiting_qr":         state.AwaitingQR,
+			"message_count":       msgCount,
+			"chat_count":          chatCount,
+			"contact_count":       contactCount,
+			"last_event_at":       lastEventAt,
+			"last_event_ago":      lastEventAgo,
 		}
 		if !state.Paired {
 			result["hint"] = "Not paired. Call login to start QR pairing."
@@ -353,11 +390,7 @@ func handleListChats(store *Store) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 		kind := argString(args, "kind")
-		limit := argInt(args, "limit", 50)
-		if limit > 200 {
-			limit = 200
-		}
-		offset := argInt(args, "offset", 0)
+		limit, offset := clampPagination(argInt(args, "limit", 50), argInt(args, "offset", 0))
 
 		chats, err := store.ListChats(ctx, kind, limit, offset)
 		if err != nil {
@@ -399,10 +432,7 @@ func handleGetChat(store *Store) server.ToolHandlerFunc {
 func handleListContacts(store *Store) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		query := argString(req.GetArguments(), "query")
-		limit := argInt(req.GetArguments(), "limit", 50)
-		if limit > 200 {
-			limit = 200
-		}
+		limit := clampLimit(argInt(req.GetArguments(), "limit", 50))
 
 		contacts, err := store.ListContacts(ctx, query, limit)
 		if err != nil {
@@ -415,16 +445,66 @@ func handleListContacts(store *Store) server.ToolHandlerFunc {
 func handleListGroups(store *Store) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		query := argString(req.GetArguments(), "query")
-		limit := argInt(req.GetArguments(), "limit", 50)
-		if limit > 200 {
-			limit = 200
-		}
+		limit := clampLimit(argInt(req.GetArguments(), "limit", 50))
 
 		groups, err := store.ListGroups(ctx, query, limit)
 		if err != nil {
 			return errorResult(fmt.Errorf("list groups: %w", err)), nil
 		}
 		return jsonResult(map[string]any{"groups": groups, "total": len(groups), "query": query, "limit": limit})
+	}
+}
+
+func recordOutboundMessage(ctx context.Context, store *Store, chatJID string, result SendResult, text, replyToID string) {
+	if store == nil {
+		return
+	}
+	ts := result.Timestamp
+	if ts.IsZero() {
+		ts = time.Now()
+	}
+	message := EventMessage{
+		ChatJID:   chatJID,
+		ID:        result.MessageID,
+		Text:      text,
+		Timestamp: ts,
+		QuotedID:  replyToID,
+		FromMe:    true,
+	}
+	if err := store.InsertMessage(ctx, message); err != nil {
+		stderr("send: mirror outbound message: %s", err)
+	}
+	if err := store.UpsertChat(ctx, chatJID, chatKindFromJID(chatJID), "", text, ts.Unix()); err != nil {
+		stderr("send: mirror outbound chat: %s", err)
+	}
+}
+
+func recordOutboundMedia(ctx context.Context, store *Store, chatJID string, result SendResult, kind, mimeType string, size int64, caption string) {
+	if store == nil {
+		return
+	}
+	ts := result.Timestamp
+	if ts.IsZero() {
+		ts = time.Now()
+	}
+	media := EventMedia{
+		ChatJID:   chatJID,
+		ID:        result.MessageID,
+		Caption:   caption,
+		Timestamp: ts,
+		Kind:      kind,
+		MimeType:  mimeType,
+		Size:      size,
+		FromMe:    true,
+	}
+	if err := store.InsertMediaMessage(ctx, media); err != nil {
+		stderr("send: mirror outbound media message: %s", err)
+	}
+	if err := store.UpsertMedia(ctx, media); err != nil {
+		stderr("send: mirror outbound media metadata: %s", err)
+	}
+	if err := store.UpsertChat(ctx, chatJID, chatKindFromJID(chatJID), "", caption, ts.Unix()); err != nil {
+		stderr("send: mirror outbound media chat: %s", err)
 	}
 }
 
@@ -447,14 +527,17 @@ func handleSendMessage(cli Client, store *Store) server.ToolHandlerFunc {
 			return errorResult(fmt.Errorf("send message: %w", err)), nil
 		}
 
-		// Reset unread for this chat since we just sent a message.
+		// Mirror the successful send locally so the UI and read tools show it
+		// immediately. The provider's own echo is idempotent on the same key.
+		recordOutboundMessage(ctx, store, chatJID, result, text, replyToID)
 		_ = store.ResetUnread(ctx, chatJID)
 
 		return jsonResult(map[string]any{
-			"message_id": result.MessageID,
-			"timestamp":  result.Timestamp.Unix(),
-			"chat_jid":   chatJID,
-			"retryable":  false,
+			"message_id":     result.MessageID,
+			"timestamp":      result.Timestamp.Unix(),
+			"chat_jid":       chatJID,
+			"delivery_state": outboundDeliveryState(),
+			"retryable":      false,
 		})
 	}
 }
@@ -475,7 +558,15 @@ func handleSendMedia(cli Client, store *Store) server.ToolHandlerFunc {
 			return errorResult(fmt.Errorf("file_path is required")), nil
 		}
 
-		// Read the file from disk.
+		info, err := os.Stat(filePath)
+		if err != nil {
+			return errorResult(fmt.Errorf("stat file %s: %w", filePath, err)), nil
+		}
+		if err := validateMediaFile(info); err != nil {
+			return errorResult(fmt.Errorf("validate file %s: %w", filePath, err)), nil
+		}
+
+		// Read the file from disk after validating its type and size.
 		data, err := os.ReadFile(filePath)
 		if err != nil {
 			return errorResult(fmt.Errorf("read file %s: %w", filePath, err)), nil
@@ -492,15 +583,16 @@ func handleSendMedia(cli Client, store *Store) server.ToolHandlerFunc {
 			return errorResult(fmt.Errorf("send media: %w", err)), nil
 		}
 
+		recordOutboundMedia(ctx, store, chatJID, result, kind, mimeType, int64(len(data)), caption)
 		_ = store.ResetUnread(ctx, chatJID)
 
 		return jsonResult(map[string]any{
-			"message_id": result.MessageID,
-			"timestamp":  result.Timestamp.Unix(),
-			"chat_jid":   chatJID,
-			"kind":       kind,
-			"file_path":  filePath,
-			"size":       len(data),
+			"message_id":     result.MessageID,
+			"timestamp":      result.Timestamp.Unix(),
+			"chat_jid":       chatJID,
+			"kind":           kind,
+			"size":           len(data),
+			"delivery_state": outboundDeliveryState(),
 		})
 	}
 }
@@ -545,10 +637,7 @@ func handleGetMessages(store *Store) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 		chatJID := argString(args, "chat_jid")
-		limit := argInt(args, "limit", 50)
-		if limit > 200 {
-			limit = 200
-		}
+		limit := clampLimit(argInt(args, "limit", 50))
 		cursor := argInt(args, "cursor", 0)
 
 		if chatJID == "" {
@@ -558,6 +647,9 @@ func handleGetMessages(store *Store) server.ToolHandlerFunc {
 		messages, err := store.GetMessages(ctx, chatJID, int64(cursor), limit)
 		if err != nil {
 			return errorResult(fmt.Errorf("get messages: %w", err)), nil
+		}
+		if err := store.ResetUnread(ctx, chatJID); err != nil {
+			stderr("get messages: reset unread: %s", err)
 		}
 
 		// Compute next cursor (timestamp of the oldest message in this page).
@@ -585,10 +677,7 @@ func handleSearchMessages(store *Store) server.ToolHandlerFunc {
 		senderJID := argString(args, "sender_jid")
 		since := argInt(args, "since", 0)
 		until := argInt(args, "until", 0)
-		limit := argInt(args, "limit", 50)
-		if limit > 200 {
-			limit = 200
-		}
+		limit := clampLimit(argInt(args, "limit", 50))
 
 		if query == "" {
 			return errorResult(fmt.Errorf("query is required")), nil
@@ -663,7 +752,7 @@ func handleDownloadMedia(cli Client, store *Store) server.ToolHandlerFunc {
 		ext := extensionForMime(result.MimeType)
 		localPath := store.MediaPath(sha256hex, ext)
 
-		if err := os.WriteFile(localPath, result.Bytes, 0o644); err != nil {
+		if err := writeMediaCache(localPath, result.Bytes); err != nil {
 			return errorResult(fmt.Errorf("write media cache: %w", err)), nil
 		}
 
@@ -693,6 +782,26 @@ func handleRequestSync(cli Client) server.ToolHandlerFunc {
 		}
 		return jsonResult(map[string]any{"status": "sync requested", "chat_jid": chatJID, "hint": "History backfill is asynchronous; check get_messages after a few seconds."})
 	}
+}
+
+func validateMediaFile(info os.FileInfo) error {
+	if info == nil {
+		return fmt.Errorf("file metadata is missing")
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("file is not a regular file")
+	}
+	if info.Size() > maxSendMediaBytes {
+		return fmt.Errorf("file is %d bytes, maximum is %d bytes", info.Size(), maxSendMediaBytes)
+	}
+	return nil
+}
+
+func writeMediaCache(path string, data []byte) error {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
 }
 
 // detectMimeType returns a MIME type based on file extension. This is a

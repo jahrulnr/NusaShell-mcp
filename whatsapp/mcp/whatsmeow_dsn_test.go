@@ -29,7 +29,16 @@ func TestSessionDSNUsesModerncPragmaSyntax(t *testing.T) {
 	}
 }
 
-// TestSessionDSNUsesForwardSlashes ensures the path separator is forward
+func TestWhatsAppDBDSNUsesModerncPragmaSyntax(t *testing.T) {
+	dsn := appDSN(t.TempDir())
+	if !strings.Contains(dsn, "_pragma=foreign_keys(on)") {
+		t.Errorf("DSN missing _pragma=foreign_keys(on): %s", dsn)
+	}
+	if strings.Contains(dsn, "_foreign_keys=") {
+		t.Errorf("DSN uses mattn-style _foreign_keys= which modernc ignores: %s", dsn)
+	}
+}
+
 // slash on all OSes (Windows filepath.Join produces backslashes which
 // break SQLite URI parsing). sessionDSN applies filepath.ToSlash so
 // the resulting DSN must never contain a backslash.

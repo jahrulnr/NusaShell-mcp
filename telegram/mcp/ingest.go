@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -38,6 +39,7 @@ type Ingester struct {
 
 	notifyInbound func(ev TelegramEvent)
 
+	mu           sync.RWMutex
 	lastEventAt  time.Time
 	lastUpdateID int
 }
@@ -67,6 +69,8 @@ func (in *Ingester) WithReconnect(fn func(ctx context.Context) (<-chan any, erro
 // (not from the bot) has been written to the store. It is the push hook the
 // host uses to trigger event-driven automation without polling.
 func (in *Ingester) WithInboundNotify(fn func(TelegramEvent)) *Ingester {
+	in.mu.Lock()
+	defer in.mu.Unlock()
 	in.notifyInbound = fn
 	return in
 }
@@ -86,7 +90,9 @@ func (in *Ingester) Run(ctx context.Context, events <-chan any) {
 				continue
 			}
 			in.handle(ctx, ev)
+			in.mu.Lock()
 			in.lastEventAt = time.Now()
+			in.mu.Unlock()
 		}
 	}
 }
@@ -119,11 +125,19 @@ func (in *Ingester) reconnectChannel(ctx context.Context) <-chan any {
 }
 
 // LastEventAt returns the timestamp of the last successfully ingested event.
-func (in *Ingester) LastEventAt() time.Time { return in.lastEventAt }
+func (in *Ingester) LastEventAt() time.Time {
+	in.mu.RLock()
+	defer in.mu.RUnlock()
+	return in.lastEventAt
+}
 
 // Watermark returns the highest update_id persisted so far. The client uses
 // this on startup to set the getUpdates offset.
-func (in *Ingester) Watermark() int { return in.lastUpdateID }
+func (in *Ingester) Watermark() int {
+	in.mu.RLock()
+	defer in.mu.RUnlock()
+	return in.lastUpdateID
+}
 
 // handle dispatches a normalized event to the appropriate store method and
 // advances the watermark.
@@ -140,6 +154,8 @@ func (in *Ingester) handle(ctx context.Context, ev any) {
 		in.handleEditedMessage(ctx, e)
 	case EventChannelPost:
 		in.handleMessage(ctx, e) // channel posts are stored like messages
+	case EventEditedChannelPost:
+		in.handleEditedMessage(ctx, e)
 	case EventCallbackQuery:
 		in.handleCallbackQuery(ctx, e)
 	}
@@ -150,10 +166,14 @@ func (in *Ingester) handle(ctx context.Context, ev any) {
 // advanceWatermark persists the new high-water update_id when it advances.
 // Telegram update_ids are monotonic per bot, so this is a safe watermark.
 func (in *Ingester) advanceWatermark(ctx context.Context, updateID int) {
+	in.mu.Lock()
 	if updateID <= in.lastUpdateID {
+		in.mu.Unlock()
 		return
 	}
 	in.lastUpdateID = updateID
+	in.mu.Unlock()
+
 	if err := in.store.SetMeta(ctx, watermarkKey, strconv.Itoa(updateID)); err != nil {
 		stderr("ingest: persist watermark: %s", err)
 	}
@@ -167,15 +187,19 @@ func (in *Ingester) handleMessage(ctx context.Context, e TelegramEvent) {
 		return
 	}
 
-	if err := in.store.InsertMessage(ctx, MessageRow{
+	inserted, err := in.store.InsertMessageIfNew(ctx, MessageRow{
 		ID:         e.MessageID(),
 		ChatID:     e.ChatID(),
 		SenderName: e.SenderName(),
 		Text:       e.Text(),
 		Timestamp:  e.Timestamp,
 		FromMe:     e.FromMe(),
-	}); err != nil {
+	})
+	if err != nil {
 		stderr("ingest: insert message: %s", err)
+		return
+	}
+	if !inserted {
 		return
 	}
 
@@ -185,8 +209,11 @@ func (in *Ingester) handleMessage(ctx context.Context, e TelegramEvent) {
 		}
 		// Push notification AFTER the message is durably stored so an
 		// event-driven host workflow reads it back via list_chats / get_messages.
-		if in.notifyInbound != nil {
-			in.notifyInbound(e)
+		in.mu.RLock()
+		notify := in.notifyInbound
+		in.mu.RUnlock()
+		if notify != nil {
+			notify(e)
 		}
 	}
 }

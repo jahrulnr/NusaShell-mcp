@@ -10,6 +10,8 @@
   let activeChatJID = null;
   let chats = [];
   let pollTimer = null;
+  let mainPollTimer = null;
+  let mainPollBusy = false;
 
   // --- DOM ---
   const loginView = document.getElementById("loginView");
@@ -23,9 +25,11 @@
   const chatName = document.getElementById("chatName");
   const chatKind = document.getElementById("chatKind");
   const messageList = document.getElementById("messageList");
+  const messageInput = document.getElementById("messageInput");
+  const sendBtn = document.getElementById("sendBtn");
   const status = document.getElementById("status");
 
-  // Pair-code mode DOM (added in 0.1.4 — see ui/index.html).
+  // Pair-code mode DOM (see ui/index.html).
   const tabQr = document.getElementById("tabQr");
   const tabCode = document.getElementById("tabCode");
   const qrPanel = document.getElementById("qrPanel");
@@ -159,6 +163,29 @@
     }
   }
 
+  function startMainPolling() {
+    stopMainPolling();
+    mainPollTimer = setInterval(refreshMainView, 7000);
+  }
+
+  function stopMainPolling() {
+    if (mainPollTimer) {
+      clearInterval(mainPollTimer);
+      mainPollTimer = null;
+    }
+  }
+
+  async function refreshMainView() {
+    if (!paired || mainPollBusy) return;
+    mainPollBusy = true;
+    try {
+      await loadChats(true);
+      if (activeChatJID) await loadMessages(activeChatJID, true);
+    } finally {
+      mainPollBusy = false;
+    }
+  }
+
   async function checkPairingStatus() {
     try {
       const result = await callTool("status");
@@ -169,6 +196,7 @@
         connected = data.connected;
         showMainView();
         await loadChats();
+        startMainPolling();
       } else if (data && !data.connected && data.awaiting_qr === false) {
         // The server tore down the login socket without pairing (server-side
         // rejection, cooldown, or a network drop). Surface this in the login
@@ -184,7 +212,7 @@
     }
   }
 
-  // --- Pair-code mode (added in 0.1.4) ---
+  // --- Pair-code mode ---
   function setMode(mode) {
     activeMode = mode;
     if (mode === "qr") {
@@ -193,7 +221,9 @@
       tabCode.classList.remove("active");
       tabCode.setAttribute("aria-selected", "false");
       qrPanel.style.display = "";
+      qrPanel.setAttribute("aria-hidden", "false");
       codePanel.style.display = "none";
+      codePanel.setAttribute("aria-hidden", "true");
       stopCodeCountdown();
     } else {
       tabCode.classList.add("active");
@@ -201,12 +231,29 @@
       tabQr.classList.remove("active");
       tabQr.setAttribute("aria-selected", "false");
       qrPanel.style.display = "none";
+      qrPanel.setAttribute("aria-hidden", "true");
       codePanel.style.display = "";
+      codePanel.setAttribute("aria-hidden", "false");
       // Focus the phone input for fast entry.
       if (phoneInput) phoneInput.focus();
     }
+    if (tabQr) tabQr.tabIndex = mode === "qr" ? 0 : -1;
+    if (tabCode) tabCode.tabIndex = mode === "code" ? 0 : -1;
     // Clear any lingering status from the other mode.
     setLoginStatus("");
+  }
+
+  function handleTabKeydown(event) {
+    if (!event || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    let next = activeMode;
+    if (event.key === "ArrowLeft") next = activeMode === "qr" ? "code" : "qr";
+    if (event.key === "ArrowRight") next = activeMode === "qr" ? "code" : "qr";
+    if (event.key === "Home") next = "qr";
+    if (event.key === "End") next = "code";
+    setMode(next);
+    const target = next === "qr" ? tabQr : tabCode;
+    if (target) target.focus();
   }
 
   function startCodeCountdown(expiresAtUnix) {
@@ -316,21 +363,34 @@
   }
 
   function showLoginView() {
+    stopMainPolling();
     mainView.style.display = "none";
     loginView.style.display = "flex";
   }
 
-  async function loadChats() {
-    setStatus("Loading chats...");
+  async function loadChats(silent) {
+    if (!silent) setStatus("Loading chats...");
     try {
       const result = await callTool("list_chats", { limit: 50 });
       const data = parseResult(result);
       chats = (data && data.chats) || [];
-      renderChatList(chats);
-      setStatus("Loaded " + chats.length + " chats");
+      renderChatList(filterChats(chats));
+      if (!silent) setStatus("Loaded " + chats.length + " chats");
     } catch (err) {
-      setStatus("Failed to load chats: " + (err.message || err), true);
+      if (!silent) setStatus("Failed to load chats: " + (err.message || err), true);
     }
+  }
+
+  function filterChats(chatsToFilter) {
+    const q = searchInput ? searchInput.value.toLowerCase().trim() : "";
+    if (!q) return chatsToFilter;
+    return chatsToFilter.filter(function (c) {
+      return (
+        (c.name || "").toLowerCase().includes(q) ||
+        (c.last_message || "").toLowerCase().includes(q) ||
+        (c.chat_jid || "").toLowerCase().includes(q)
+      );
+    });
   }
 
   function renderChatList(chatsToRender) {
@@ -343,6 +403,8 @@
     chatsToRender.forEach(function (chat) {
       const item = document.createElement("div");
       item.className = "chat-item";
+      item.setAttribute("role", "button");
+      item.tabIndex = 0;
       if (chat.chat_jid === activeChatJID) item.classList.add("active");
       item.dataset.jid = chat.chat_jid;
 
@@ -362,10 +424,10 @@
       right.style.alignItems = "center";
       right.style.gap = "6px";
 
-      if (chat.kind === "group") {
+      if (chat.kind && chat.kind !== "dm") {
         const kindTag = document.createElement("span");
         kindTag.className = "kind-tag";
-        kindTag.textContent = "group";
+        kindTag.textContent = chat.kind;
         right.appendChild(kindTag);
       }
 
@@ -381,8 +443,15 @@
       item.appendChild(name);
       item.appendChild(meta);
 
-      item.addEventListener("click", function () {
+      function activateChat() {
         selectChat(chat.chat_jid, chat.name || chat.chat_jid.split("@")[0], chat.kind);
+      }
+      item.addEventListener("click", activateChat);
+      item.addEventListener("keydown", function (event) {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          activateChat();
+        }
       });
       chatList.appendChild(item);
     });
@@ -405,16 +474,22 @@
     }
   }
 
-  async function loadMessages(jid) {
-    setStatus("Loading messages...");
+  async function loadMessages(jid, silent) {
+    if (!silent) setStatus("Loading messages...");
     try {
       const result = await callTool("get_messages", { chat_jid: jid, limit: 50 });
       const data = parseResult(result);
       const messages = (data && data.messages) || [];
+      // A user may switch chats while the request is in flight. Do not let a
+      // slower response overwrite the newly selected thread.
+      if (jid !== activeChatJID) return;
+      const nearBottom = !messageList ||
+        messageList.scrollHeight - messageList.scrollTop - messageList.clientHeight < 80;
       renderMessages(messages);
-      setStatus("");
+      if (nearBottom && messageList) messageList.scrollTop = messageList.scrollHeight;
+      if (!silent) setStatus("");
     } catch (err) {
-      setStatus("Failed to load messages: " + (err.message || err), true);
+      if (!silent) setStatus("Failed to load messages: " + (err.message || err), true);
     }
   }
 
@@ -454,22 +529,51 @@
     });
   }
 
+  async function sendMessage() {
+    const jid = activeChatJID;
+    const text = messageInput ? messageInput.value.trim() : "";
+    if (!jid) {
+      setStatus("Select a chat before sending.", true);
+      return;
+    }
+    if (!text) {
+      if (messageInput) messageInput.focus();
+      return;
+    }
+
+    if (sendBtn) sendBtn.disabled = true;
+    if (messageInput) messageInput.disabled = true;
+    setStatus("Sending...");
+    try {
+      await callTool("send_message", { chat_jid: jid, text: text });
+      if (messageInput) {
+        messageInput.value = "";
+        messageInput.style.height = "";
+      }
+      await loadChats(true);
+      await loadMessages(jid, true);
+      setStatus("");
+    } catch (err) {
+      setStatus("Failed to send message: " + (err.message || err), true);
+    } finally {
+      if (sendBtn) sendBtn.disabled = false;
+      if (messageInput) {
+        messageInput.disabled = false;
+        messageInput.focus();
+      }
+    }
+  }
+
+  function autoGrowMessageInput() {
+    if (!messageInput) return;
+    messageInput.style.height = "auto";
+    messageInput.style.height = Math.min(messageInput.scrollHeight, 120) + "px";
+  }
+
   // --- Search ---
   if (searchInput) {
     searchInput.addEventListener("input", function () {
-      const q = searchInput.value.toLowerCase().trim();
-      if (!q) {
-        renderChatList(chats);
-        return;
-      }
-      const filtered = chats.filter(function (c) {
-        return (
-          (c.name || "").toLowerCase().includes(q) ||
-          (c.last_message || "").toLowerCase().includes(q) ||
-          (c.chat_jid || "").toLowerCase().includes(q)
-        );
-      });
-      renderChatList(filtered);
+      renderChatList(filterChats(chats));
     });
   }
 
@@ -514,8 +618,14 @@
   // --- Init ---
   getQrBtn.addEventListener("click", getQrCode);
   refreshQrBtn.addEventListener("click", getQrCode);
-  if (tabQr) tabQr.addEventListener("click", function () { setMode("qr"); });
-  if (tabCode) tabCode.addEventListener("click", function () { setMode("code"); });
+  if (tabQr) {
+    tabQr.addEventListener("click", function () { setMode("qr"); });
+    tabQr.addEventListener("keydown", handleTabKeydown);
+  }
+  if (tabCode) {
+    tabCode.addEventListener("click", function () { setMode("code"); });
+    tabCode.addEventListener("keydown", handleTabKeydown);
+  }
   if (getCodeBtn) getCodeBtn.addEventListener("click", getPairCode);
   if (refreshCodeBtn) refreshCodeBtn.addEventListener("click", getPairCode);
   if (phoneInput) {
@@ -527,10 +637,22 @@
     });
   }
 
-  // Stop the pairing poll + countdown when the window closes so we don't
-  // leak a timer or interval.
+  if (messageInput) {
+    messageInput.addEventListener("input", autoGrowMessageInput);
+    messageInput.addEventListener("keydown", function (event) {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        sendMessage();
+      }
+    });
+  }
+  if (sendBtn) sendBtn.addEventListener("click", sendMessage);
+
+  // Stop the pairing and main-view polls + countdown when the window closes
+  // so we don't leak timers or intervals.
   window.addEventListener("beforeunload", function () {
     stopPairingPoll();
+    stopMainPolling();
     stopCodeCountdown();
   });
 
@@ -544,6 +666,7 @@
         connected = data.connected;
         showMainView();
         await loadChats();
+        startMainPolling();
       } else {
         showLoginView();
       }

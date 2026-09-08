@@ -13,7 +13,8 @@ import (
 
 // buildMediaMessage constructs a waE2E.Message for the given media kind
 // using an already-uploaded attachment. Returns nil for unsupported kinds.
-func buildMediaMessage(kind string, uploaded whatsmeow.UploadResponse, mimeType, caption string) *waE2E.Message {
+func buildMediaMessage(kind string, uploaded whatsmeow.UploadResponse, mimeType, caption, replyToID string, chatJID types.JID) *waE2E.Message {
+	contextInfo := mediaReplyContext(replyToID, chatJID)
 	switch whatsmeow.MediaType(kind) {
 	case whatsmeow.MediaImage:
 		return &waE2E.Message{
@@ -21,6 +22,7 @@ func buildMediaMessage(kind string, uploaded whatsmeow.UploadResponse, mimeType,
 				URL:           proto.String(uploaded.URL),
 				Mimetype:      proto.String(mimeType),
 				Caption:       proto.String(caption),
+				ContextInfo:   contextInfo,
 				FileSHA256:    uploaded.FileSHA256,
 				FileLength:    proto.Uint64(uploaded.FileLength),
 				MediaKey:      uploaded.MediaKey,
@@ -33,6 +35,7 @@ func buildMediaMessage(kind string, uploaded whatsmeow.UploadResponse, mimeType,
 				URL:           proto.String(uploaded.URL),
 				Mimetype:      proto.String(mimeType),
 				Caption:       proto.String(caption),
+				ContextInfo:   contextInfo,
 				FileSHA256:    uploaded.FileSHA256,
 				FileLength:    proto.Uint64(uploaded.FileLength),
 				MediaKey:      uploaded.MediaKey,
@@ -44,6 +47,7 @@ func buildMediaMessage(kind string, uploaded whatsmeow.UploadResponse, mimeType,
 			AudioMessage: &waE2E.AudioMessage{
 				URL:           proto.String(uploaded.URL),
 				Mimetype:      proto.String(mimeType),
+				ContextInfo:   contextInfo,
 				FileSHA256:    uploaded.FileSHA256,
 				FileLength:    proto.Uint64(uploaded.FileLength),
 				MediaKey:      uploaded.MediaKey,
@@ -56,6 +60,7 @@ func buildMediaMessage(kind string, uploaded whatsmeow.UploadResponse, mimeType,
 				URL:           proto.String(uploaded.URL),
 				Mimetype:      proto.String(mimeType),
 				Title:         proto.String(caption),
+				ContextInfo:   contextInfo,
 				FileSHA256:    uploaded.FileSHA256,
 				FileLength:    proto.Uint64(uploaded.FileLength),
 				MediaKey:      uploaded.MediaKey,
@@ -64,6 +69,16 @@ func buildMediaMessage(kind string, uploaded whatsmeow.UploadResponse, mimeType,
 		}
 	default:
 		return nil
+	}
+}
+
+func mediaReplyContext(replyToID string, chatJID types.JID) *waE2E.ContextInfo {
+	if replyToID == "" {
+		return nil
+	}
+	return &waE2E.ContextInfo{
+		StanzaID:  proto.String(replyToID),
+		RemoteJID: proto.String(chatJID.String()),
 	}
 }
 
@@ -203,7 +218,8 @@ func formatJIDLabel(jid, pushName string) string {
 	return jid
 }
 
-// chatKindFromJID returns "group" for group JIDs, "dm" otherwise.
+// chatKindFromJID returns "group" for group JIDs, "channel" for newsletter
+// JIDs, and "dm" otherwise.
 func chatKindFromJID(jid string) string {
 	if strings.HasSuffix(jid, "@g.us") {
 		return "group"

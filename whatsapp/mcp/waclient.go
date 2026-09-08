@@ -43,10 +43,11 @@ type PairCode struct {
 
 // PairState describes the current linking state for the status/login tools.
 type PairState struct {
-	Paired     bool   // true if a WhatsApp account is linked
-	Connected  bool   // true if the socket is currently connected
-	DeviceJID  string // linked device JID (empty if not paired)
-	AwaitingQR bool   // true if a QR login flow is in progress
+	Paired             bool   // true if a WhatsApp account is linked
+	TransportConnected bool   // true after the websocket transport is established
+	Connected          bool   // true only after WhatsApp authenticated this linked device
+	DeviceJID          string // linked device JID (empty if not paired)
+	AwaitingQR         bool   // true if a QR login flow is in progress
 }
 
 // Client is the only WhatsApp-touching interface in this plugin.

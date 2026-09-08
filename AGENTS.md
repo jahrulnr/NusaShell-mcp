@@ -111,15 +111,16 @@ Mirror `telegram/mcp/tools.go` / `whatsapp/mcp/tools.go`:
 
 ### FTS5 must not be external-content against a WITHOUT ROWID table
 
-`telegram/mcp` stores messages with a composite TEXT primary key
-`PRIMARY KEY (chat_id, id)`, which makes the table **WITHOUT ROWID**. A
-`CREATE VIRTUAL TABLE … USING fts5(…, content='messages', content_rowid='rowid')`
-external-content index then fails every read with
-`no such column: T.message_id`. Use a **self-contained** FTS5 table
-(`USING fts5(message_id, chat_id, text)`) plus triggers. If a legacy DB has the
-broken index, `migrate()` must `DROP TABLE IF EXISTS fts_messages`, recreate,
-and `INSERT INTO fts_messages … SELECT … FROM messages` — idempotent, with a
-regression test (`TestMigrate_RepairsBrokenFTSIndex`).
+The Telegram and WhatsApp stores keep the provider message identity in a base
+column named `id`, while the legacy external-content FTS definitions exposed a
+separate `message_id` column and relied on `content_rowid='rowid'`. With these
+schemas, `MATCH`/column reads fail with `no such column: T.message_id`. Use a
+self-contained FTS5 table (`USING fts5(message_id, chat_id, text)` or the
+WhatsApp equivalent) plus triggers. If a legacy DB has the broken index,
+`migrate()` must drop and recreate it, then
+`INSERT INTO fts_messages … SELECT … FROM messages` so old rows remain
+searchable. Keep a regression test for both fresh writes and legacy-index
+repair.
 
 ### Allowlist matching must accept id / @username / display name
 
@@ -153,17 +154,26 @@ tags. Link URLs are already `&`-escaped by then — only escape `"`.
 
 ### Push notifications (host event-driven automation)
 
-Message-bridge plugins can push `notifications/message` (MCP server→client)
-once an inbound message is stored, so the host can trigger automation without
-polling. Contract: params `{plugin, event: "message", chat_id, message_id,
-chat_type, subject, text (≤200 chars), from_me: false}`; only non-from-me
-messages; fire AFTER the store write (the responding workflow reads it back).
-Host side (`infrastructure/mcpclient/notify.go` in the NusaShell repo)
-translates it to `<short-id>.<event>` (e.g. `telegram.message`) and dedups on
-`Event.ID` (`mcp:<server>:<event>:<chat>:<msg>`). IMPORTANT host gotcha: a
-stdio MCP client created via `NewStdioMCPClientWithOptions` auto-starts the
-transport but not `client.Client.Start` — you MUST call `Start(ctx)` yourself
-or `SetNotificationHandler` is never wired and notifications are dropped
-silently. The ingester notifier hook lives in `main.go` via
-`ingester.WithInboundNotify(...)`; unit-test with
-`TestIngester_NotifiesOnInboundMessage`.
+Message-bridge plugins publish durable business facts with the namespaced MCP
+notification method `notifications/nusashell/event`. The envelope is versioned
+and contains `schema_version: 1`, a stable `event_id`, `type`, optional
+`occurred_at` (RFC3339Nano), optional `subject`, `attributes`, and optional JSON
+`data`. The host assigns the event `source` from the connected server and
+normalizes the identity as `mcp:<server-id>:<event-id>`, so publishers must not
+send `source` or invent host IDs. The host validates the envelope, enforces
+payload bounds, and deduplicates by that normalized identity.
+
+Telegram publishes `telegram.message` with
+`event_id=message:<chat_id>:<message_id>`; WhatsApp publishes
+`whatsapp.message_received` with
+`event_id=message:<chat_jid>:<message_id>`. Both publish only after a new
+inbound message is stored and never for outbound messages or duplicate
+retries. Their bounded message fields live in `attributes` and `data`; the
+complete message remains available through the plugin's read tools. New
+publishers must use the generic event method, not the deprecated
+`notifications/message` compatibility bridge.
+
+The ingester notifier hook is wired in each plugin's `main.go` via
+`WithInboundNotify(...)`; unit-test it with the plugin's inbound notification
+regression tests. The host-side stdio MCP client must call `Start(ctx)` before
+installing notification handling, otherwise notifications can be dropped.

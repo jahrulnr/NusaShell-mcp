@@ -343,6 +343,24 @@ func registerTools(s *server.MCPServer, cli Client, store *Store, ingester *Inge
 
 // --- Handlers --------------------------------------------------------------
 
+func clampPagination(limit, offset int) (int, int) {
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return limit, offset
+}
+
+func clampLimit(limit int) int {
+	limit, _ = clampPagination(limit, 0)
+	return limit
+}
+
 func handleStatus(cli Client, store *Store, ingester *Ingester) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		state := cli.State()
@@ -425,11 +443,7 @@ func handleListChats(store *Store) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 		kind := argString(args, "kind")
-		limit := argInt(args, "limit", 50)
-		if limit > 200 {
-			limit = 200
-		}
-		offset := argInt(args, "offset", 0)
+		limit, offset := clampPagination(argInt(args, "limit", 50), argInt(args, "offset", 0))
 
 		chats, err := store.ListChats(ctx, kind, limit, offset)
 		if err != nil {
@@ -473,10 +487,7 @@ func handleGetMessages(store *Store) server.ToolHandlerFunc {
 		if err := validateChatID(chatID); err != nil {
 			return errorResult(err), nil
 		}
-		limit := argInt(args, "limit", 50)
-		if limit > 200 {
-			limit = 200
-		}
+		limit := clampLimit(argInt(args, "limit", 50))
 		cursor := int64(argInt(args, "cursor", 0))
 
 		messages, err := store.GetMessagesCursor(ctx, chatID, cursor, limit)
@@ -518,10 +529,7 @@ func handleSearchMessages(store *Store) server.ToolHandlerFunc {
 		chatID := argString(args, "chat_id")
 		since := int64(argInt(args, "since", 0))
 		until := int64(argInt(args, "until", 0))
-		limit := argInt(args, "limit", 50)
-		if limit > 200 {
-			limit = 200
-		}
+		limit := clampLimit(argInt(args, "limit", 50))
 
 		// The store's SearchMessages performs the FTS5 match; the optional
 		// chat_id / time-window filters are applied here since the schema's
@@ -1025,7 +1033,7 @@ func (s *Store) GetMessagesCursor(ctx context.Context, chatID string, before int
 	}
 	defer rows.Close()
 
-	var out []MessageRow
+	out := make([]MessageRow, 0)
 	for rows.Next() {
 		var m MessageRow
 		var fromMe int
@@ -1054,7 +1062,7 @@ func (s *Store) GetChatHistory(ctx context.Context, chatID string) ([]MessageRow
 	}
 	defer rows.Close()
 
-	var out []MessageRow
+	out := make([]MessageRow, 0)
 	for rows.Next() {
 		var m MessageRow
 		var fromMe int

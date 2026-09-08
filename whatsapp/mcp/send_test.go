@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"go.mau.fi/whatsmeow"
 	waE2E "go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
-	"go.mau.fi/whatsmeow"
 )
 
 func TestSendTextPipeline_MarkdownThenChunk(t *testing.T) {
@@ -108,7 +108,7 @@ func TestSendMediaPipeline_CaptionRoundTrips(t *testing.T) {
 	// text. This test asserts the round-trip — the (already-converted)
 	// caption ends up in the media submessage unchanged.
 	converted := markdownToWhatsApp("**photo** — see below")
-	got := buildMediaMessage(string(whatsmeow.MediaImage), stubUpload(), "image/jpeg", converted)
+	got := buildMediaMessage(string(whatsmeow.MediaImage), stubUpload(), "image/jpeg", converted, "", types.EmptyJID)
 	if got == nil {
 		t.Fatal("buildMediaMessage(image) = nil")
 	}
@@ -118,12 +118,24 @@ func TestSendMediaPipeline_CaptionRoundTrips(t *testing.T) {
 }
 
 func TestSendMediaPipeline_EmptyCaptionIsEmpty(t *testing.T) {
-	got := buildMediaMessage(string(whatsmeow.MediaImage), stubUpload(), "image/jpeg", "")
+	got := buildMediaMessage(string(whatsmeow.MediaImage), stubUpload(), "image/jpeg", "", "", types.EmptyJID)
 	if got == nil {
 		t.Fatal("buildMediaMessage(image) = nil")
 	}
 	if got.GetImageMessage().GetCaption() != "" {
 		t.Errorf("empty caption got = %q, want empty", got.GetImageMessage().GetCaption())
+	}
+}
+
+func TestSendMediaPipeline_ReplyAddsContextInfo(t *testing.T) {
+	chatJID := types.NewJID("15550000010", types.DefaultUserServer)
+	got := buildMediaMessage(string(whatsmeow.MediaImage), stubUpload(), "image/jpeg", "caption", "QUOTED123", chatJID)
+	if got == nil || got.GetImageMessage() == nil {
+		t.Fatal("buildMediaMessage(image) = nil")
+	}
+	contextInfo := got.GetImageMessage().GetContextInfo()
+	if contextInfo.GetStanzaID() != "QUOTED123" || contextInfo.GetRemoteJID() != chatJID.String() {
+		t.Errorf("reply context = %+v, want stanza QUOTED123 in %s", contextInfo, chatJID)
 	}
 }
 

@@ -136,28 +136,30 @@ func (s *Store) migrate() error {
 			chat_id,
 			text
 		)`,
+		// Recreate triggers along with the self-contained FTS table. Older
+		// databases may still have triggers that use external-content delete
+		// syntax, which fails on this table shape.
+		`DROP TRIGGER IF EXISTS messages_ai`,
+		`DROP TRIGGER IF EXISTS messages_ad`,
+		`DROP TRIGGER IF EXISTS messages_au`,
 		// FTS5 triggers keep the index in sync with the messages table.
 		`CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
 			INSERT INTO fts_messages(message_id, chat_id, text)
 			VALUES (new.id, new.chat_id, COALESCE(new.text, ''));
 		END`,
 		`CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
-			INSERT INTO fts_messages(fts_messages, message_id, chat_id, text)
-			VALUES('delete', old.id, old.chat_id, COALESCE(old.text, ''));
+			DELETE FROM fts_messages WHERE message_id = old.id AND chat_id = old.chat_id;
 		END`,
 		`CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
-			INSERT INTO fts_messages(fts_messages, message_id, chat_id, text)
-			VALUES('delete', old.id, old.chat_id, COALESCE(old.text, ''));
+			DELETE FROM fts_messages WHERE message_id = old.id AND chat_id = old.chat_id;
 			INSERT INTO fts_messages(message_id, chat_id, text)
 			VALUES (new.id, new.chat_id, COALESCE(new.text, ''));
 		END`,
-		// FTS rebuild for databases created before v0.2: the old definition used
-		// content='messages' (external content). That requires the content table
-		// to expose a rowid, but messages has a composite TEXT primary key and is
-		// therefore WITHOUT ROWID — the external-content index is unwritable and
-		// search_messages fails with "no such column". We drop it and recreate
-		// the FTS table as a self-contained regular FTS5 table, then repopulate
-		// from messages. Idempotent: on fresh DBs this is a no-op re-create.
+		// FTS rebuild for databases created before v0.2: the old external-content
+		// definition exposed message_id while the base messages table stores the
+		// identity as id, so search column reads failed. Recreate the FTS table as
+		// a self-contained regular FTS5 table, then repopulate it from messages.
+		// Idempotent: on fresh DBs this is a no-op re-create.
 		`DROP TABLE IF EXISTS fts_messages`,
 		`CREATE VIRTUAL TABLE IF NOT EXISTS fts_messages USING fts5(
 			message_id,
@@ -198,11 +200,23 @@ func (s *Store) UpsertChat(ctx context.Context, id, typ, name, lastMsg string, l
 // InsertMessage inserts a message. INSERT OR IGNORE — the live ingester wins
 // on duplicate so reconnect/backfill doesn't double-insert.
 func (s *Store) InsertMessage(ctx context.Context, msg MessageRow) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.InsertMessageIfNew(ctx, msg)
+	return err
+}
+
+// InsertMessageIfNew reports whether the INSERT OR IGNORE created a row. The
+// ingester uses this to keep unread counts and event notifications idempotent
+// when Telegram retries an update.
+func (s *Store) InsertMessageIfNew(ctx context.Context, msg MessageRow) (bool, error) {
+	result, err := s.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO messages (id, chat_id, sender_name, text, timestamp, from_me, edited_at, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		msg.ID, msg.ChatID, msg.SenderName, msg.Text, msg.Timestamp, msg.FromMe, msg.EditedAt, time.Now().Unix())
-	return err
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows > 0, err
 }
 
 // UpdateMessageEdited sets new text and edited_at for a message.
@@ -295,7 +309,7 @@ func (s *Store) ListChats(ctx context.Context, typ string, limit, offset int) ([
 	}
 	defer rows.Close()
 
-	var out []ChatRow
+	out := make([]ChatRow, 0)
 	for rows.Next() {
 		var c ChatRow
 		if err := rows.Scan(&c.ID, &c.Type, &c.Name, &c.LastMessage, &c.LastMessageAt, &c.UnreadCount); err != nil {
@@ -334,7 +348,7 @@ func (s *Store) GetMessages(ctx context.Context, chatID string, limit, offset in
 	}
 	defer rows.Close()
 
-	var out []MessageRow
+	out := make([]MessageRow, 0)
 	for rows.Next() {
 		var m MessageRow
 		var fromMe int
@@ -368,7 +382,7 @@ func (s *Store) SearchMessages(ctx context.Context, query string) ([]MessageRow,
 	}
 	defer rows.Close()
 
-	var out []MessageRow
+	out := make([]MessageRow, 0)
 	for rows.Next() {
 		var m MessageRow
 		var fromMe int
@@ -395,7 +409,7 @@ func (s *Store) ListPendingApprovals(ctx context.Context) ([]ApprovalRow, error)
 	}
 	defer rows.Close()
 
-	var out []ApprovalRow
+	out := make([]ApprovalRow, 0)
 	for rows.Next() {
 		var a ApprovalRow
 		if err := rows.Scan(&a.ID, &a.ChatID, &a.MessageID, &a.Text, &a.SenderID, &a.Time, &a.Status); err != nil {
@@ -415,7 +429,7 @@ func (s *Store) ListAllowlist(ctx context.Context) ([]string, error) {
 	}
 	defer rows.Close()
 
-	var out []string
+	out := make([]string, 0)
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {

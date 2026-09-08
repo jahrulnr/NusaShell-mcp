@@ -77,13 +77,16 @@ type EventContact struct {
 
 // EventGroupInfo is a group metadata update.
 type EventGroupInfo struct {
-	JID         string
-	Name        string
-	Topic       string
-	OwnerJID    string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	Participants []EventGroupParticipant
+	JID       string
+	Name      string
+	Topic     string
+	OwnerJID  string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	Joined    []EventGroupParticipant
+	Left      []string
+	Promoted  []string
+	Demoted   []string
 }
 
 // EventGroupParticipant is a member of a group.

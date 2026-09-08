@@ -477,6 +477,16 @@ function emptyChatsState() {
   return emptyState('💬', 'Belum ada chat', 'Chat muncul begitu bot menerima pesan.', true);
 }
 
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  const item = event.target && event.target.closest
+    ? event.target.closest('.chat-item[role="button"]')
+    : null;
+  if (!item) return;
+  event.preventDefault();
+  item.click();
+});
+
 function renderChatItem(c) {
   const name = c.name || c.id || '?';
   const unread = Number(c.unread_count) || 0;
@@ -855,7 +865,7 @@ async function renderSettings(el) {
 
       <div class="section-title">Tentang</div>
       <div class="card about-footer">
-        NusaShell Telegram v0.3.0 · Bot API 10.3 · library <span class="mono">mymrac/telego</span> · data lokal SQLite (WAL + FTS5).
+        NusaShell Telegram v0.4.0 · Bot API 10.3 · library <span class="mono">mymrac/telego</span> · data lokal SQLite (WAL + FTS5).
       </div>
     </div>`;
 }

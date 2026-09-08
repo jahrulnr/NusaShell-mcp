@@ -1,7 +1,7 @@
 {
   "id": "nusashell.telegram",
   "name": "Telegram",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "icon": "file://icon.png",
   "ui": {
     "entry": "ui/index.html",
@@ -21,6 +21,28 @@
     "env": {},
     "autostart": false,
     "keepAliveOnClose": false
+  },
+  "automation": {
+    "emits": [
+      {
+        "type": "telegram.message",
+        "description": "A new inbound Telegram message was received and stored",
+        "payloadSchema": {
+          "type": "object",
+          "properties": {
+            "chat_id": { "type": "string" },
+            "message_id": { "type": "string" },
+            "chat_type": { "type": "string" },
+            "sender_id": { "type": "string" },
+            "sender_username": { "type": "string" },
+            "sender_name": { "type": "string" },
+            "text": { "type": "string", "maxLength": 200 },
+            "from_me": { "type": "boolean" }
+          },
+          "required": ["chat_id", "message_id", "chat_type", "sender_id", "sender_username", "sender_name", "text", "from_me"]
+        }
+      }
+    ]
   },
   "contract": {
     "entry": "CONTRACT.md"

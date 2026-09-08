@@ -32,6 +32,25 @@ Each plugin's `mcp/` folder is an independent Go module that depends on
 `mcpkit` via a `replace` directive. The MCP protocol is implemented with
 [`mark3labs/mcp-go`](https://github.com/mark3labs/mcp-go).
 
+## Business-event notifications
+
+The message plugins use the shared, versioned NusaShell event notification
+method `notifications/nusashell/event`. A publisher sends `schema_version: 1`,
+a stable `event_id`, a domain `type`, and optional `occurred_at`, `subject`,
+`attributes`, and JSON `data`. The host assigns `source` from the connected
+plugin and deduplicates the normalized identity
+`mcp:<server-id>:<event-id>`.
+
+- Telegram emits `telegram.message`, with
+  `message:<chat_id>:<message_id>` event IDs.
+- WhatsApp emits `whatsapp.message_received`, with
+  `message:<chat_jid>:<message_id>` event IDs.
+
+Both notifications are emitted only after a newly received inbound message is
+stored. Text in the event payload is bounded, while the complete message is
+available through the plugin's read tools. The plugins do not use the
+deprecated `notifications/message` compatibility bridge for these events.
+
 ## Build
 
 Each plugin server is a standalone Go binary. Build from the plugin's `mcp/`

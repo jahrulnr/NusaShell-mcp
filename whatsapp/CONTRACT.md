@@ -28,17 +28,36 @@ SQLite database as they arrive and exposed through MCP tools.
 |------|-------------|
 | `login` | Starts QR pairing flow; links WhatsApp account on scan |
 | `logout` | Disconnects and clears WhatsApp auth state |
-| `send_message` | Sends a text message to a WhatsApp chat |
-| `send_media` | Uploads and sends a file as a WhatsApp attachment |
+| `send_message` | Sends a text message to a WhatsApp chat; mirrors it into the local store. Success means WhatsApp accepted the request, not that a recipient received or read it. |
+| `send_media` | Uploads and sends a regular file (up to 50 MiB) as a WhatsApp attachment; `reply_to_id` creates a quoted media reply. Success means server acknowledgement only. |
 | `react` | Adds or removes a reaction on a message |
 | `mark_read` | Marks a chat as read up to a message ID |
 | `request_sync` | Asks WhatsApp to backfill history for a chat |
-| `status`, `list_chats`, `get_chat`, `list_contacts`, `list_groups`, `get_messages`, `search_messages`, `download_media` | Read-only; no side effects |
+| `status`, `list_chats`, `get_chat`, `list_contacts`, `list_groups`, `search_messages` | Read-only; no side effects |
+| `get_messages` | Reads messages from the local store and clears that chat's local unread badge |
+| `download_media` | Downloads and caches the media blob under the plugin data directory |
+
+**Business-event notifications.** After a newly received inbound text or
+media message is durably stored, the plugin emits the NusaShell business-event
+notification `notifications/nusashell/event`. The envelope has
+`schema_version: 1`, a stable `event_id` in the form
+`message:<chat_jid>:<message_id>`, and `type: whatsapp.message_received`. It
+includes `occurred_at` when the provider timestamp is available, a sender/chat
+`subject`, and an `attributes` object containing `chat_id`, `chat_jid`,
+`chat_type`, `message_id`, `sender_id`, `sender_jid`, `text` (at most 200
+Unicode characters), `kind`, and `from_me`. The `data` object contains the
+bounded text and message identity. The host assigns `source`, adds the
+normalized event id, and deduplicates deliveries. Outbound messages, duplicate
+deliveries, and non-message events never emit an event. This plugin does not
+use the legacy `notifications/message` bridge.
 
 ## Best Practices
 
 1. **Check `status` first.** Before any send or read operation, call `status`
-   to confirm the bridge is connected. Sends fail fast when disconnected.
+   to confirm the bridge is authenticated (`connected: true`).
+   `transport_connected` only means a websocket transport exists; it is not
+   authorization to send. Sends fail fast until WhatsApp emits its authenticated
+   connected event.
 
 2. **Resolve JIDs before sending.** Use `list_chats`, `list_contacts`, or
    `list_groups` to find the target `chat_jid`. Never guess or construct JIDs

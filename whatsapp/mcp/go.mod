@@ -5,7 +5,7 @@ go 1.26.5
 require (
 	github.com/jahrulnr/NusaShell-mcp/mcpkit v0.0.0
 	github.com/mark3labs/mcp-go v0.58.0
-	go.mau.fi/whatsmeow v0.0.0-20260821141805-33cfac511629
+	go.mau.fi/whatsmeow v0.0.0-20260908082135-57796d3d6b41
 	google.golang.org/protobuf v1.36.12
 	modernc.org/sqlite v1.51.0
 )

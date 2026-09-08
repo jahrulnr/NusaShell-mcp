@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"sync"
 	"time"
 )
 
@@ -11,7 +12,10 @@ import (
 // readers while the ingester writes).
 type Ingester struct {
 	store *Store
-	lastEventAt time.Time
+
+	mu            sync.RWMutex
+	lastEventAt   time.Time
+	notifyInbound func(ev any)
 }
 
 // NewIngester creates an ingester that writes to the given store.
@@ -19,7 +23,15 @@ func NewIngester(store *Store) *Ingester {
 	return &Ingester{store: store}
 }
 
-// Run drains the event channel until ctx is cancelled. It blocks — call
+// WithInboundNotify registers a callback invoked after an inbound text or
+// media event has been persisted. Outbound events never invoke this callback.
+func (in *Ingester) WithInboundNotify(fn func(any)) *Ingester {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	in.notifyInbound = fn
+	return in
+}
+
 // from a dedicated goroutine.
 func (in *Ingester) Run(ctx context.Context, events <-chan any) {
 	for {
@@ -31,17 +43,29 @@ func (in *Ingester) Run(ctx context.Context, events <-chan any) {
 				return
 			}
 			in.handle(ctx, ev)
+			in.mu.Lock()
 			in.lastEventAt = time.Now()
+			in.mu.Unlock()
 		}
 	}
 }
 
 // LastEventAt returns the timestamp of the last ingested event.
 func (in *Ingester) LastEventAt() time.Time {
+	in.mu.RLock()
+	defer in.mu.RUnlock()
 	return in.lastEventAt
 }
 
-// handle dispatches a normalized event to the appropriate store method.
+func (in *Ingester) notifyInboundEvent(ev any) {
+	in.mu.RLock()
+	fn := in.notifyInbound
+	in.mu.RUnlock()
+	if fn != nil {
+		fn(ev)
+	}
+}
+
 func (in *Ingester) handle(ctx context.Context, ev any) {
 	switch e := ev.(type) {
 	case EventMessage:
@@ -79,8 +103,12 @@ func (in *Ingester) handleMessage(ctx context.Context, e EventMessage) {
 	}
 
 	// Insert the message (INSERT OR IGNORE — live ingester wins on duplicate).
-	if err := in.store.InsertMessage(ctx, e); err != nil {
+	inserted, err := in.store.InsertMessageIfNew(ctx, e)
+	if err != nil {
 		stderr("ingest: insert message: %s", err)
+		return
+	}
+	if !inserted {
 		return
 	}
 
@@ -93,6 +121,7 @@ func (in *Ingester) handleMessage(ctx context.Context, e EventMessage) {
 		if err := in.store.IncrementUnread(ctx, e.ChatJID); err != nil {
 			stderr("ingest: increment unread: %s", err)
 		}
+		in.notifyInboundEvent(e)
 	}
 }
 
@@ -106,8 +135,21 @@ func (in *Ingester) handleMedia(ctx context.Context, e EventMedia) {
 	}
 
 	// Insert the media message row (caption as text for searchability).
-	if err := in.store.InsertMediaMessage(ctx, e); err != nil {
+	inserted, err := in.store.InsertMediaMessageIfNew(ctx, e)
+	if err != nil {
 		stderr("ingest: insert media message: %s", err)
+		return
+	}
+	if !inserted {
+		// A successful local outbound mirror may arrive before WhatsApp's own
+		// echo, which carries the opaque download reference needed by
+		// download_media. Refresh that reference without recounting or
+		// renotifying the duplicate message.
+		if e.DownloadRef != "" {
+			if err := in.store.UpsertMedia(ctx, e); err != nil {
+				stderr("ingest: refresh media metadata: %s", err)
+			}
+		}
 		return
 	}
 
@@ -125,6 +167,7 @@ func (in *Ingester) handleMedia(ctx context.Context, e EventMedia) {
 		if err := in.store.IncrementUnread(ctx, e.ChatJID); err != nil {
 			stderr("ingest: increment unread (media): %s", err)
 		}
+		in.notifyInboundEvent(e)
 	}
 }
 
@@ -157,9 +200,9 @@ func (in *Ingester) handleGroupInfo(ctx context.Context, e EventGroupInfo) {
 		stderr("ingest: upsert group: %s", err)
 		return
 	}
-	if len(e.Participants) > 0 {
-		if err := in.store.SetGroupParticipants(ctx, e.JID, e.Participants); err != nil {
-			stderr("ingest: set group participants: %s", err)
+	if len(e.Joined) > 0 || len(e.Left) > 0 || len(e.Promoted) > 0 || len(e.Demoted) > 0 {
+		if err := in.store.ApplyGroupParticipantDelta(ctx, e.JID, e.Joined, e.Left, e.Promoted, e.Demoted); err != nil {
+			stderr("ingest: apply group participant delta: %s", err)
 		}
 	}
 	// Update the chat name for the group.

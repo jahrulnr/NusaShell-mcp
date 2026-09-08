@@ -4,9 +4,98 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
+
+	"github.com/jahrulnr/NusaShell-mcp/mcpkit"
 )
+
+// notificationEventType is the manifest-declared domain event type for an
+// inbound WhatsApp message. The host supplies the event source.
+const notificationEventType = "whatsapp.message_received"
+
+// truncateEventText keeps the notification payload small while the complete
+// message remains available through the local store.
+func truncateEventText(text string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= max {
+		return text
+	}
+	if max == 1 {
+		return "…"
+	}
+	return string(runes[:max-1]) + "…"
+}
+
+// inboundEventParams builds the generic NusaShell business-event envelope for
+// an inbound WhatsApp text or media message. Event identity is based on the
+// provider's chat/message identity so retries are deduplicated by the host.
+func inboundEventParams(ev any) map[string]any {
+	var chatJID, senderJID, messageID, text, kind string
+	var fromMe bool
+	var occurredAt time.Time
+
+	switch e := ev.(type) {
+	case EventMessage:
+		chatJID = e.ChatJID
+		senderJID = e.SenderJID
+		messageID = e.ID
+		text = e.Text
+		kind = e.Kind
+		fromMe = e.FromMe
+		occurredAt = e.Timestamp
+	case EventMedia:
+		chatJID = e.ChatJID
+		senderJID = e.SenderJID
+		messageID = e.ID
+		text = e.Caption
+		kind = e.Kind
+		fromMe = e.FromMe
+		occurredAt = e.Timestamp
+	default:
+		return nil
+	}
+	if kind == "" {
+		kind = "text"
+	}
+	if occurredAt.IsZero() {
+		occurredAt = time.Time{}
+	}
+	boundedText := truncateEventText(text, 200)
+	subject := senderJID
+	if subject == "" {
+		subject = chatJID
+	}
+	attributes := map[string]any{
+		"chat_id":    chatJID,
+		"chat_jid":   chatJID,
+		"chat_type":  chatKindFromJID(chatJID),
+		"message_id": messageID,
+		"sender_id":  senderJID,
+		"sender_jid": senderJID,
+		"text":       boundedText,
+		"kind":       kind,
+		"from_me":    fromMe,
+	}
+	data := map[string]any{
+		"chat_id":    chatJID,
+		"message_id": messageID,
+		"text":       boundedText,
+		"kind":       kind,
+	}
+	return mcpkit.BusinessEventParams(
+		"message:"+chatJID+":"+messageID,
+		notificationEventType,
+		occurredAt,
+		subject,
+		attributes,
+		data,
+	)
+}
 
 // jsonResult wraps data as a JSON MCP tool result with both text content
 // and structured content.

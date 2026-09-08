@@ -20,6 +20,8 @@ const (
 	EventEditedMessage EventType = "edited_message"
 	// EventChannelPost is a new incoming channel post (Update.ChannelPost).
 	EventChannelPost EventType = "channel_post"
+	// EventEditedChannelPost is a revised channel post (Update.EditedChannelPost).
+	EventEditedChannelPost EventType = "edited_channel_post"
 )
 
 // TelegramEvent is the normalized representation of a single Telegram update,
@@ -140,8 +142,7 @@ func NormalizeUpdate(botID int64, u telego.Update) (TelegramEvent, bool) {
 	case u.ChannelPost != nil:
 		return normalizeMessage(EventChannelPost, botID, u.ChannelPost, 0, u.UpdateID), true
 	case u.EditedChannelPost != nil:
-		// An edited channel post is still a channel post; carry the edit time.
-		return normalizeMessage(EventChannelPost, botID, u.EditedChannelPost, u.EditedChannelPost.EditDate, u.UpdateID), true
+		return normalizeMessage(EventEditedChannelPost, botID, u.EditedChannelPost, u.EditedChannelPost.EditDate, u.UpdateID), true
 	case u.CallbackQuery != nil:
 		return normalizeCallback(botID, u.CallbackQuery, u.UpdateID), true
 	}

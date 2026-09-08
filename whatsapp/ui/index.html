@@ -21,12 +21,12 @@
 
         <!-- Pairing mode tabs -->
         <div class="login-tabs" role="tablist">
-          <button id="tabQr" class="login-tab active" role="tab" aria-selected="true">QR Code</button>
-          <button id="tabCode" class="login-tab" role="tab" aria-selected="false">Phone Code</button>
+          <button id="tabQr" class="login-tab active" role="tab" aria-selected="true" aria-controls="qrPanel" tabindex="0">QR Code</button>
+          <button id="tabCode" class="login-tab" role="tab" aria-selected="false" aria-controls="codePanel" tabindex="-1">Phone Code</button>
         </div>
 
         <!-- QR mode panel -->
-        <div id="qrPanel" class="login-panel-body">
+        <div id="qrPanel" class="login-panel-body" role="tabpanel" aria-labelledby="tabQr" aria-hidden="false" tabindex="0">
           <div id="qrContainer" class="qr-container">
             <div class="qr-placeholder">Click "Get QR Code" to start</div>
           </div>
@@ -37,7 +37,7 @@
         </div>
 
         <!-- Pair-code mode panel -->
-        <div id="codePanel" class="login-panel-body" style="display:none">
+        <div id="codePanel" class="login-panel-body" role="tabpanel" aria-labelledby="tabCode" aria-hidden="true" tabindex="0" style="display:none">
           <div class="code-form">
             <label class="code-label" for="phoneInput">Phone number</label>
             <input
@@ -69,7 +69,7 @@
           </div>
         </div>
 
-        <div id="loginStatus" class="login-status"></div>
+        <div id="loginStatus" class="login-status" role="status" aria-live="polite" aria-atomic="true"></div>
       </div>
     </div>
 
@@ -77,7 +77,7 @@
     <div id="mainView" class="view" style="display:none">
       <div id="sidebar">
         <div class="sidebar-header">
-          <input id="searchInput" type="text" placeholder="Search chats..." />
+          <input id="searchInput" type="text" placeholder="Search chats..." aria-label="Search chats" />
         </div>
         <div id="chatList" class="chat-list"></div>
       </div>
@@ -87,7 +87,16 @@
           <span id="chatKind" class="chat-kind"></span>
         </div>
         <div id="messageList" class="message-list"></div>
-        <div id="status"></div>
+        <div id="composer" class="composer">
+          <textarea
+            id="messageInput"
+            rows="1"
+            placeholder="Type a message..."
+            aria-label="Message text"
+          ></textarea>
+          <button id="sendBtn" class="btn-primary" type="button">Send</button>
+        </div>
+        <div id="status" role="status" aria-live="polite" aria-atomic="true"></div>
       </div>
     </div>
   </div>

@@ -96,7 +96,7 @@ body {
   justify-content: center;
 }
 
-/* Pairing mode tabs (added in 0.1.4) */
+/* Pairing mode tabs */
 .login-tabs {
   display: flex;
   gap: 0;
@@ -136,7 +136,7 @@ body {
   width: 100%;
 }
 
-/* Pair-code form (added in 0.1.4) */
+/* Pair-code form */
 .code-form {
   width: 100%;
   margin-bottom: 16px;
@@ -376,7 +376,7 @@ body {
   overflow-y: auto;
   padding: 16px;
   display: flex;
-  flex-direction: column-reverse;
+  flex-direction: column;
   gap: 4px;
   background: var(--wa-bg);
 }
@@ -423,6 +423,46 @@ body {
 
 .message.media {
   color: var(--wa-green);
+}
+
+.composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px 16px;
+  background: var(--bg-card);
+  border-top: 1px solid var(--border);
+}
+
+.composer textarea {
+  flex: 1;
+  min-height: 38px;
+  max-height: 120px;
+  resize: vertical;
+  padding: 9px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.composer textarea:focus {
+  outline: none;
+  border-color: var(--wa-green);
+}
+
+.composer textarea:disabled,
+.composer button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.composer .btn-primary {
+  padding: 9px 16px;
+  white-space: nowrap;
 }
 
 #status {

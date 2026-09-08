@@ -8,9 +8,10 @@
 // search_messages, download_media, request_sync.
 //
 // Data: {NUSASHELL_USER_DATA}/plugins-data/nusashell.whatsapp/
-//   session.db    — whatsmeow session and device keys
-//   whatsapp.db   — application DB (messages, contacts, groups, media metadata)
-//   media/        — downloaded media blobs, sha256-named
+//
+//	session.db    — whatsmeow session and device keys
+//	whatsapp.db   — application DB (messages, contacts, groups, media metadata)
+//	media/        — downloaded media blobs, sha256-named
 package main
 
 import (
@@ -43,6 +44,11 @@ func main() {
 
 	// Create the WhatsApp client (whatsmeow-backed).
 	cli := NewWhatsmeowClient(dataDir, isVerbose())
+	defer func() {
+		if err := cli.Close(); err != nil {
+			stderr("close WhatsApp client: %s", err)
+		}
+	}()
 
 	// Try to connect using stored credentials. If not paired, the server
 	// starts anyway — the user calls login to begin QR pairing.
@@ -57,6 +63,20 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ingester := NewIngester(store)
+
+	// Build the MCP server before wiring the push hook so the notifier closure
+	// captures a non-nil server before the first WhatsApp event can arrive.
+	s := server.NewMCPServer("nusashell-whatsapp", "0.3.0",
+		server.WithToolCapabilities(true),
+		server.WithPromptCapabilities(false),
+		server.WithResourceCapabilities(false, false),
+	)
+	ingester.WithInboundNotify(func(ev any) {
+		params := inboundEventParams(ev)
+		if params != nil {
+			s.SendNotificationToAllClients(mcpkit.BusinessEventNotificationMethod, params)
+		}
+	})
 	go ingester.Run(ctx, cli.Events(ctx))
 
 	// Graceful shutdown on SIGINT/SIGTERM.
@@ -69,12 +89,6 @@ func main() {
 		cancel()
 	}()
 
-	// Build and register the MCP server.
-	s := server.NewMCPServer("nusashell-whatsapp", "0.1.4",
-		server.WithToolCapabilities(true),
-		server.WithPromptCapabilities(false),
-		server.WithResourceCapabilities(false, false),
-	)
 	registerTools(s, cli, store, ingester)
 
 	// Serve over stdio — diagnostics to stderr, stdout reserved for MCP.

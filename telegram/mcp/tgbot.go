@@ -60,6 +60,16 @@ func NewTelegramClient(store *Store, dataDir string, verbose bool) *BotClient {
 
 func (c *BotClient) tokenPath() string { return filepath.Join(c.dataDir, tokenFile) }
 
+func writeToken(path, token string) error {
+	if err := os.WriteFile(path, []byte(token), 0o600); err != nil {
+		return err
+	}
+	// WriteFile preserves the mode of an existing file. Re-assert the
+	// permission so a token created by an older release cannot remain readable
+	// by other users after a successful login.
+	return os.Chmod(path, 0o600)
+}
+
 // State reports the current pairing/connection state.
 func (c *BotClient) State() PairState {
 	c.mu.RLock()
@@ -114,7 +124,7 @@ func (c *BotClient) Login(ctx context.Context, token string) (PairState, error) 
 	if err != nil {
 		return PairState{}, fmt.Errorf("validate token (getMe): %w", err)
 	}
-	if err := os.WriteFile(c.tokenPath(), []byte(token), 0o600); err != nil {
+	if err := writeToken(c.tokenPath(), token); err != nil {
 		return PairState{}, fmt.Errorf("store token: %w", err)
 	}
 	if err := c.startWithBot(ctx, bot, me); err != nil {

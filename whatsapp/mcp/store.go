@@ -86,21 +86,25 @@ type MediaRow struct {
 	Caption     string `json:"caption"`
 	DownloadRef string `json:"-"`
 	LocalPath   string `json:"local_path,omitempty"`
+	SHA256      string `json:"sha256,omitempty"`
 	Downloaded  bool   `json:"downloaded"`
+}
+
+// appDSN uses modernc.org/sqlite pragma syntax and forward slashes so the
+// application database behaves consistently across supported platforms.
+func appDSN(dataDir string) string {
+	return fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(on)",
+		filepath.ToSlash(filepath.Join(dataDir, "whatsapp.db")))
 }
 
 // NewStore opens (or creates) the application database at dataDir/whatsapp.db.
 func NewStore(dataDir string) (*Store, error) {
 	mediaDir := filepath.Join(dataDir, "media")
-	if err := os.MkdirAll(mediaDir, 0o755); err != nil {
+	if err := os.MkdirAll(mediaDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create media dir: %w", err)
 	}
 
-	// Use forward slashes in the DSN — SQLite URI parsing expects them
-	// regardless of OS (Windows filepath.Join produces backslashes).
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_foreign_keys=on",
-		filepath.ToSlash(filepath.Join(dataDir, "whatsapp.db")))
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sql.Open("sqlite", appDSN(dataDir))
 	if err != nil {
 		return nil, fmt.Errorf("open whatsapp db: %w", err)
 	}
@@ -201,25 +205,32 @@ func (s *Store) migrate() error {
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL DEFAULT ''
 		)`,
-		`CREATE VIRTUAL TABLE IF NOT EXISTS fts_messages USING fts5(
+		`DROP TRIGGER IF EXISTS messages_ai`,
+		`DROP TRIGGER IF EXISTS messages_ad`,
+		`DROP TRIGGER IF EXISTS messages_au`,
+		// Rebuild the FTS table on every startup. Older releases used an
+		// external-content table whose message_id column did not map to the
+		// messages.id column, causing MATCH/column reads to fail. A
+		// self-contained index is small enough for this local mirror and works
+		// for both fresh and old DBs.
+		`DROP TABLE IF EXISTS fts_messages`,
+		`CREATE VIRTUAL TABLE fts_messages USING fts5(
 			message_id UNINDEXED,
 			chat_jid UNINDEXED,
-			text,
-			content='messages',
-			content_rowid='rowid'
+			text
 		)`,
-		// FTS5 trigger to keep the index in sync with the messages table.
-		`CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+		`INSERT INTO fts_messages(message_id, chat_jid, text)
+			SELECT id, chat_jid, COALESCE(text, '') FROM messages`,
+		// FTS5 triggers to keep the self-contained index in sync with messages.
+		`CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
 			INSERT INTO fts_messages(message_id, chat_jid, text)
 			VALUES (new.id, new.chat_jid, COALESCE(new.text, ''));
 		END`,
-		`CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
-			INSERT INTO fts_messages(fts_messages, message_id, chat_jid, text)
-			VALUES('delete', old.id, old.chat_jid, COALESCE(old.text, ''));
+		`CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
+			DELETE FROM fts_messages WHERE message_id = old.id AND chat_jid = old.chat_jid;
 		END`,
-		`CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
-			INSERT INTO fts_messages(fts_messages, message_id, chat_jid, text)
-			VALUES('delete', old.id, old.chat_jid, COALESCE(old.text, ''));
+		`CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
+			DELETE FROM fts_messages WHERE message_id = old.id AND chat_jid = old.chat_jid;
 			INSERT INTO fts_messages(message_id, chat_jid, text)
 			VALUES (new.id, new.chat_jid, COALESCE(new.text, ''));
 		END`,
@@ -240,8 +251,13 @@ func (s *Store) UpsertChat(ctx context.Context, jid, kind, name, lastMessage str
 		`INSERT INTO chats (jid, kind, name, last_message, last_message_at, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(jid) DO UPDATE SET
-		   kind=excluded.kind, name=CASE WHEN excluded.name != '' THEN excluded.name ELSE chats.name END,
-		   last_message=excluded.last_message, last_message_at=excluded.last_message_at`,
+		   kind=excluded.kind,
+		   name=CASE WHEN excluded.name != '' THEN excluded.name ELSE chats.name END,
+		   last_message=CASE
+		     WHEN excluded.last_message_at >= chats.last_message_at AND excluded.last_message != '' THEN excluded.last_message
+		     ELSE chats.last_message
+		   END,
+		   last_message_at=MAX(excluded.last_message_at, chats.last_message_at)`,
 		jid, kind, name, lastMessage, lastMessageAt, time.Now().Unix())
 	return err
 }
@@ -278,7 +294,10 @@ func (s *Store) UpsertGroup(ctx context.Context, jid, name, topic, ownerJID stri
 		`INSERT INTO groups (jid, name, topic, owner_jid, updated_at)
 		 VALUES (?, ?, ?, ?, ?)
 		 ON CONFLICT(jid) DO UPDATE SET
-		   name=excluded.name, topic=excluded.topic, owner_jid=excluded.owner_jid, updated_at=excluded.updated_at`,
+		   name=CASE WHEN excluded.name != '' THEN excluded.name ELSE groups.name END,
+		   topic=CASE WHEN excluded.topic != '' THEN excluded.topic ELSE groups.topic END,
+		   owner_jid=CASE WHEN excluded.owner_jid != '' THEN excluded.owner_jid ELSE groups.owner_jid END,
+		   updated_at=MAX(excluded.updated_at, groups.updated_at)`,
 		jid, name, topic, ownerJID, updatedAt)
 	return err
 }
@@ -304,14 +323,67 @@ func (s *Store) SetGroupParticipants(ctx context.Context, groupJID string, parti
 	return tx.Commit()
 }
 
+// ApplyGroupParticipantDelta atomically applies WhatsApp's incremental group
+// membership updates without replacing members that were not mentioned.
+func (s *Store) ApplyGroupParticipantDelta(ctx context.Context, groupJID string, joined []EventGroupParticipant, left, promoted, demoted []string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	for _, participant := range joined {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO group_participants (group_jid, jid, is_admin, joined_at)
+			 VALUES (?, ?, ?, ?)
+			 ON CONFLICT(group_jid, jid) DO UPDATE SET
+			   is_admin=excluded.is_admin,
+			   joined_at=CASE WHEN group_participants.joined_at > 0 THEN group_participants.joined_at ELSE excluded.joined_at END`,
+			groupJID, participant.JID, participant.IsAdmin, participant.JoinedAt.Unix()); err != nil {
+			return err
+		}
+	}
+	for _, jid := range promoted {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE group_participants SET is_admin = 1 WHERE group_jid = ? AND jid = ?`, groupJID, jid); err != nil {
+			return err
+		}
+	}
+	for _, jid := range demoted {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE group_participants SET is_admin = 0 WHERE group_jid = ? AND jid = ?`, groupJID, jid); err != nil {
+			return err
+		}
+	}
+	for _, jid := range left {
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM group_participants WHERE group_jid = ? AND jid = ?`, groupJID, jid); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // InsertMessage inserts a message. INSERT OR IGNORE — live ingester wins on
 // duplicate, so reconnect/history-sync backfill doesn't double-insert.
 func (s *Store) InsertMessage(ctx context.Context, m EventMessage) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.InsertMessageIfNew(ctx, m)
+	return err
+}
+
+// InsertMessageIfNew inserts a message and reports whether a new row was
+// created. The inserted flag lets the ingester make unread counters and push
+// notifications idempotent when WhatsApp retries the same event.
+func (s *Store) InsertMessageIfNew(ctx context.Context, m EventMessage) (bool, error) {
+	result, err := s.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO messages (id, chat_jid, sender_jid, text, timestamp, from_me, kind, quoted_id, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, m.ChatJID, m.SenderJID, m.Text, m.Timestamp.Unix(), m.FromMe, "text", m.QuotedID, time.Now().Unix())
-	return err
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows > 0, err
 }
 
 // UpsertMedia inserts or updates media metadata.
@@ -330,13 +402,24 @@ func (s *Store) UpsertMedia(ctx context.Context, m EventMedia) error {
 // InsertMediaMessage inserts a message row for a media message (with empty
 // text so it shows up in get_messages but search uses the caption via FTS).
 func (s *Store) InsertMediaMessage(ctx context.Context, m EventMedia) error {
+	_, err := s.InsertMediaMessageIfNew(ctx, m)
+	return err
+}
+
+// InsertMediaMessageIfNew is the idempotent variant used by the ingester to
+// avoid counting or notifying duplicate media deliveries.
+func (s *Store) InsertMediaMessageIfNew(ctx context.Context, m EventMedia) (bool, error) {
 	text := m.Caption // caption is searchable; media-only messages use caption as text
 	kind := m.Kind
-	_, err := s.db.ExecContext(ctx,
+	result, err := s.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO messages (id, chat_jid, sender_jid, text, timestamp, from_me, kind, quoted_id, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, '', ?)`,
 		m.ID, m.ChatJID, m.SenderJID, text, m.Timestamp.Unix(), m.FromMe, kind, time.Now().Unix())
-	return err
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows > 0, err
 }
 
 // UpdateMessageEdited sets new text and edited_at for a message.
@@ -409,7 +492,7 @@ func (s *Store) ListChats(ctx context.Context, kind string, limit, offset int) (
 	}
 	defer rows.Close()
 
-	var out []ChatRow
+	out := make([]ChatRow, 0)
 	for rows.Next() {
 		var c ChatRow
 		if err := rows.Scan(&c.JID, &c.Kind, &c.Name, &c.LastMessage, &c.LastMessageAt, &c.UnreadCount); err != nil {
@@ -444,7 +527,7 @@ func (s *Store) GetGroupParticipants(ctx context.Context, groupJID string) ([]Gr
 	}
 	defer rows.Close()
 
-	var out []GroupParticipantRow
+	out := make([]GroupParticipantRow, 0)
 	for rows.Next() {
 		var p GroupParticipantRow
 		var isAdmin int
@@ -475,7 +558,7 @@ func (s *Store) ListContacts(ctx context.Context, query string, limit int) ([]Co
 	}
 	defer rows.Close()
 
-	var out []ContactRow
+	out := make([]ContactRow, 0)
 	for rows.Next() {
 		var c ContactRow
 		if err := rows.Scan(&c.JID, &c.PushName, &c.BusinessName, &c.Phone, &c.UpdatedAt); err != nil {
@@ -504,7 +587,7 @@ func (s *Store) ListGroups(ctx context.Context, query string, limit int) ([]Grou
 	}
 	defer rows.Close()
 
-	var out []GroupRow
+	out := make([]GroupRow, 0)
 	for rows.Next() {
 		var g GroupRow
 		if err := rows.Scan(&g.JID, &g.Name, &g.Topic, &g.OwnerJID, &g.UpdatedAt); err != nil {
@@ -540,7 +623,7 @@ func (s *Store) GetMessages(ctx context.Context, chatJID string, cursor int64, l
 	}
 	defer rows.Close()
 
-	var out []MessageRow
+	out := make([]MessageRow, 0)
 	for rows.Next() {
 		var m MessageRow
 		var fromMe int
@@ -606,7 +689,7 @@ func (s *Store) SearchMessages(ctx context.Context, query, chatJID, senderJID st
 	}
 	defer rows.Close()
 
-	var out []MessageRow
+	out := make([]MessageRow, 0)
 	for rows.Next() {
 		var m MessageRow
 		var fromMe int
@@ -637,7 +720,7 @@ func (s *Store) GetMedia(ctx context.Context, chatJID, messageID string) (*Media
 	err := s.db.QueryRowContext(ctx,
 		`SELECT chat_jid, message_id, kind, mime_type, size, width, height, duration_sec, caption, local_path, sha256, downloaded, downloaded_at
 		 FROM media WHERE chat_jid = ? AND message_id = ?`, chatJID, messageID).
-		Scan(&m.ChatJID, &m.MessageID, &m.Kind, &m.MimeType, &m.Size, &m.Width, &m.Height, &m.DurationSec, &m.Caption, &m.LocalPath, &m.LocalPath, &downloaded, &downloadedAt)
+		Scan(&m.ChatJID, &m.MessageID, &m.Kind, &m.MimeType, &m.Size, &m.Width, &m.Height, &m.DurationSec, &m.Caption, &m.LocalPath, &m.SHA256, &downloaded, &downloadedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -718,7 +801,7 @@ func (s *Store) GetReactions(ctx context.Context, chatJID, messageID string) ([]
 	}
 	defer rows.Close()
 
-	var out []map[string]any
+	out := make([]map[string]any, 0)
 	for rows.Next() {
 		var fromJID, emoji string
 		if err := rows.Scan(&fromJID, &emoji); err != nil {
