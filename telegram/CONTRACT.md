@@ -22,6 +22,8 @@ approval state are persisted locally in SQLite.
 | `login` | Validates token via `getMe`, stores token (file mode 0600) |
 | `logout` | Clears stored token, disconnects |
 | `send_message` | Sends a real message to a Telegram chat; mirrors the message into the local store so the UI shows it instantly |
+| `internal_send_progress` | Host-internal progress tool; no store mirror, no outbound event. Sends or edits a lifecycle progress message (reasoning / tool started / tool ok / step done). Alias of `admin.send_progress`. |
+| `admin.send_progress` | Host-internal progress tool; no store mirror, no outbound event. Same handler as `internal_send_progress` (dual alias for host forwarder naming). |
 | `send_media` | Uploads and sends a file; mirrors the caption/label into the local store |
 | `send_inline_buttons` | Sends a message with inline keyboard buttons; mirrors the text into the local store |
 | `edit_message` | Edits an existing message (text or media) |
@@ -52,6 +54,15 @@ contains the bounded text and message identity. The host assigns `source`,
 adds the normalized event id, and deduplicates deliveries. Outbound bot
 messages and duplicate updates never emit an event. This replaces the legacy
 `notifications/message` bridge for this plugin.
+
+**Host-internal progress.** `internal_send_progress` / `admin.send_progress` exist
+for NusaShell host forwarders that push agent lifecycle updates into a chat
+(placeholder send + edit). Agents do not need these tools — the host hides them
+from agent tool listings. Unlike `send_message`, progress updates are not
+mirrored into SQLite and do not emit `telegram.message` events; they are not
+subject to privacy/allowlist gating. When `message_id` is set, the tool edits
+that message; if the edit fails (stale/missing/uneditable), it falls back to a
+new send and returns `edited: false`.
 
 **All send tools deliver real messages to real people.** Confirm
 the chat and content before sending.

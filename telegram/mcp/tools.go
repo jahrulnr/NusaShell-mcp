@@ -1,6 +1,6 @@
 package main
 
-// tools.go registers the 20 MCP tools for the nusashell.telegram plugin.
+// tools.go registers the MCP tools for the nusashell.telegram plugin.
 //
 // Handler pattern follows the WhatsApp plugin (whatsapp/mcp/tools.go): each
 // handler is a server.ToolHandlerFunc closure returned by a handleXxx factory,
@@ -72,6 +72,19 @@ const (
 	toolGetChatHistory    = "get_chat_history"
 	toolRequestSync       = "request_sync"
 	toolSetPrivacyMode    = "set_privacy_mode"
+	// Host-internal progress aliases (same handler). Not for agent listings —
+	// the host forwarder calls these; agents use send_message / edit_message.
+	toolInternalSendProgress = "internal_send_progress"
+	toolAdminSendProgress    = "admin.send_progress"
+)
+
+// Progress event_type / status enums (validated in the handler; also declared
+// via mcp.Enum on the tool schema).
+var (
+	progressEventTypes = []string{
+		"step_started", "tool_started", "tool_ended", "step_ended", "reasoning", "text",
+	}
+	progressStatuses = []string{"running", "ok", "error"}
 )
 
 // Telegram message text cap in code points (sendMessage). chunkText is
@@ -339,6 +352,40 @@ func registerTools(s *server.MCPServer, cli Client, store *Store, ingester *Inge
 			mcp.Description("True to enforce the allowlist (privacy mode on), false to accept all senders."),
 		),
 	), handleSetPrivacyMode(store))
+
+	// Host-internal progress: dual alias, same handler. Delivers lifecycle
+	// updates (reasoning / tool started / tool ok / step done) without
+	// mirroring into SQLite or emitting telegram.message events.
+	progressHandler := handleSendProgress(cli)
+	for _, name := range []string{toolInternalSendProgress, toolAdminSendProgress} {
+		s.AddTool(mcp.NewTool(name,
+			mcp.WithDescription("Host-internal: push agent lifecycle progress into a Telegram chat (new message or edit an existing placeholder). Not for agent use — the host hides this from agent tool listings. No store mirror, no outbound event, no allowlist gate."),
+			mcp.WithString("chat_id",
+				mcp.Required(),
+				mcp.Description("Target chat id (int64-as-string or '@username')."),
+			),
+			mcp.WithString("event_type",
+				mcp.Required(),
+				mcp.Description("Lifecycle event: step_started, tool_started, tool_ended, step_ended, reasoning, or text."),
+				mcp.Enum(progressEventTypes...),
+			),
+			mcp.WithString("status",
+				mcp.Description("Outcome marker: running, ok (default), or error."),
+				mcp.Enum(progressStatuses...),
+			),
+			mcp.WithString("title",
+				mcp.Description("Short title (max 200 code points)."),
+				mcp.MaxLength(200),
+			),
+			mcp.WithString("detail",
+				mcp.Description("Optional detail (max 500 code points)."),
+				mcp.MaxLength(500),
+			),
+			mcp.WithString("message_id",
+				mcp.Description("When set, edit this existing message instead of sending a new one (placeholder pattern). On edit failure, falls back to a new send."),
+			),
+		), progressHandler)
+	}
 }
 
 // --- Handlers --------------------------------------------------------------
@@ -990,6 +1037,76 @@ func handleSetPrivacyMode(store *Store) server.ToolHandlerFunc {
 			"hint":    boolHint(enabled),
 		})
 	}
+}
+
+// handleSendProgress pushes host-driven agent lifecycle progress into a chat.
+// Unlike send_message it never mirrors into SQLite, never emits a business
+// event, and never consults the allowlist — the host is the sole caller.
+// When message_id is set, it edits that placeholder; on any edit failure it
+// falls back to a fresh send so a stale id never fails the whole call.
+func handleSendProgress(cli Client) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		chatID := argString(args, "chat_id")
+		if err := validateChatID(chatID); err != nil {
+			return errorResult(err), nil
+		}
+		eventType := strings.TrimSpace(argString(args, "event_type"))
+		if !isAllowedEnum(eventType, progressEventTypes) {
+			return errorResult(fmt.Errorf("event_type must be one of: %s", strings.Join(progressEventTypes, ", "))), nil
+		}
+		status := strings.TrimSpace(argString(args, "status"))
+		if status == "" {
+			status = "ok"
+		}
+		if !isAllowedEnum(status, progressStatuses) {
+			return errorResult(fmt.Errorf("status must be one of: %s", strings.Join(progressStatuses, ", "))), nil
+		}
+		title := truncateRunes(argString(args, "title"), 200)
+		detail := truncateRunes(argString(args, "detail"), 500)
+		text := formatProgressHTML(eventType, status, title, detail)
+		messageID := strings.TrimSpace(argString(args, "message_id"))
+
+		// Edit path: attempt in-place update of the placeholder; fall back to
+		// send on any failure (missing, not editable, network, bad id).
+		if messageID != "" {
+			if _, err := strconv.ParseInt(messageID, 10, 64); err == nil {
+				if err := cli.EditMessage(ctx, chatID, messageID, text, "HTML"); err == nil {
+					return jsonResult(map[string]any{
+						"message_id": messageID,
+						"edited":     true,
+						"chat_id":    chatID,
+					})
+				} else {
+					stderr("send_progress: edit %s in %s failed, falling back to send: %s", messageID, chatID, safeErrorMessage(err))
+				}
+			} else {
+				stderr("send_progress: invalid message_id %q, falling back to send", messageID)
+			}
+		}
+
+		res, err := cli.SendText(ctx, chatID, text, 0, "HTML", false)
+		if err != nil {
+			return errorResult(fmt.Errorf("send progress: %w", err)), nil
+		}
+		// Intentionally no recordOutbound / no inbound notify — progress is
+		// host scaffolding, not chat content.
+		return jsonResult(map[string]any{
+			"message_id": strconv.FormatInt(res.MessageID, 10),
+			"edited":     false,
+			"chat_id":    chatID,
+		})
+	}
+}
+
+// isAllowedEnum reports whether v is an exact member of allowed.
+func isAllowedEnum(v string, allowed []string) bool {
+	for _, a := range allowed {
+		if v == a {
+			return true
+		}
+	}
+	return false
 }
 
 // boolHint returns a human-readable description of the privacy-mode state.

@@ -175,6 +175,61 @@ func groupBlockquotes(text string) string {
 	return strings.Join(out, "\n")
 }
 
+// truncateRunes returns s limited to max Unicode code points. Unlike
+// truncateText it does not append an ellipsis — used for field caps where the
+// caller already owns presentation.
+func truncateRunes(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max])
+}
+
+// progressEventLabel returns a short human label for a progress event_type.
+func progressEventLabel(eventType string) string {
+	switch eventType {
+	case "step_started":
+		return "Step started"
+	case "tool_started":
+		return "Tool started"
+	case "tool_ended":
+		return "Tool ended"
+	case "step_ended":
+		return "Step done"
+	case "reasoning":
+		return "Reasoning"
+	case "text":
+		return "Update"
+	default:
+		return eventType
+	}
+}
+
+// formatProgressHTML builds a parse_mode=HTML progress body from lifecycle
+// fields. Title and detail are escaped; the composed message is truncated to
+// telegramTextCap code points if needed (title/detail are already capped).
+func formatProgressHTML(eventType, status, title, detail string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "<b>%s</b> · %s", sanitizeForTelegram(progressEventLabel(eventType)), sanitizeForTelegram(status))
+	if title != "" {
+		b.WriteByte('\n')
+		b.WriteString(sanitizeForTelegram(title))
+	}
+	if detail != "" {
+		b.WriteByte('\n')
+		b.WriteString(sanitizeForTelegram(detail))
+	}
+	text := b.String()
+	if len([]rune(text)) > telegramTextCap {
+		return truncateRunes(text, telegramTextCap)
+	}
+	return text
+}
+
 // chunkText splits text into pieces that fit within maxLen code points,
 // preferring to split at paragraph (\n\n), then line (\n), then space
 // boundaries. Telegram's sendMessage cap is 4096 code points (not bytes), so
