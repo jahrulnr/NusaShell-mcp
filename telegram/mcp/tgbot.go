@@ -66,7 +66,9 @@ func writeToken(path, token string) error {
 	}
 	// WriteFile preserves the mode of an existing file. Re-assert the
 	// permission so a token created by an older release cannot remain readable
-	// by other users after a successful login.
+	// by other users after a successful login. On Windows this is best-effort:
+	// there are no POSIX mode bits — os.Chmod only maps the owner-write bit to
+	// the read-only attribute, and access control comes from profile ACLs.
 	return os.Chmod(path, 0o600)
 }
 

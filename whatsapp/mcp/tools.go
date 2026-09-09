@@ -801,6 +801,8 @@ func writeMediaCache(path string, data []byte) error {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return err
 	}
+	// Re-assert 0600 for a pre-existing file (WriteFile keeps its old mode).
+	// Best-effort on Windows, where mode bits do not exist (see token write).
 	return os.Chmod(path, 0o600)
 }
 
