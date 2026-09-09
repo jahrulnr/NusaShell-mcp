@@ -213,6 +213,10 @@ func progressEventLabel(eventType string) string {
 // fields. Title and detail are escaped; the composed message is truncated to
 // telegramTextCap code points if needed (title/detail are already capped).
 func formatProgressHTML(eventType, status, title, detail string) string {
+	// The final reply is a clean chat message: no header, no title.
+	if eventType == "step_ended" && status == "ok" {
+		return sanitizeForTelegram(detail)
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "<b>%s</b> · %s", sanitizeForTelegram(progressEventLabel(eventType)), sanitizeForTelegram(status))
 	if title != "" {
