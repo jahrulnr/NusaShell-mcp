@@ -111,7 +111,9 @@ jobs:
   release:
     name: Release ${{ matrix.plugin }}
     needs: [detect, test]
-    continue-on-error: true
+    # No continue-on-error: a failed or skipped release must fail the run so
+    # publish-versions (which waits on this job) never records a tag that does
+    # not exist.
     if: github.event_name == 'push' && github.ref == 'refs/heads/master' && needs.detect.outputs.has-changes == 'true'
     runs-on: ubuntu-latest
     strategy:
@@ -172,11 +174,16 @@ jobs:
             "${{ matrix.plugin }}-${{ steps.version.outputs.version }}.tar.gz" \
             --title "${{ matrix.plugin }} v${{ steps.version.outputs.version }}" \
             --notes "Built from commit ${{ github.sha }}" \
-            --target master
+            --target "${{ github.sha }}"
 
   publish-versions:
     name: Update versions.json
-    needs: [detect]
+    # Must wait for test AND release: versions.json is the download source of
+    # truth for plugin updates, so it may only record tags whose GitHub
+    # release actually exists. Waiting on release also transitively waits on
+    # test — a failing or skipped release job leaves this job skipped and
+    # versions.json untouched.
+    needs: [detect, test, release]
     if: github.event_name == 'push' && github.ref == 'refs/heads/master' && needs.detect.outputs.has-changes == 'true'
     runs-on: ubuntu-latest
 
@@ -189,12 +196,19 @@ jobs:
       - name: Update versions.json
         env:
           PLUGINS: ${{ needs.detect.outputs.plugins }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git pull --rebase origin master 2>/dev/null || true
           echo "$PLUGINS" | jq -r '.[]' | while read plugin; do
             VERSION=$(jq -r '.version' "${plugin}/manifest.json")
             TAG="${plugin}-v${VERSION}"
+            # Defense in depth: never advertise a release that does not exist.
+            # A missing release here means the updater would 404 on download.
+            if ! gh release view "$TAG" >/dev/null 2>&1; then
+              echo "::error::Release $TAG not found — refusing to update versions.json for $plugin."
+              exit 1
+            fi
             TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
             jq --arg plugin "$plugin" --arg version "$VERSION" --arg tag "$TAG" --arg ts "$TIMESTAMP" \
               '.[$plugin] = {version: $version, tag: $tag, releasedAt: $ts}' \

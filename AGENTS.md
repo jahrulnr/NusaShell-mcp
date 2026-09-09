@@ -104,7 +104,11 @@ Mirror `telegram/mcp/tools.go` / `whatsapp/mcp/tools.go`:
    creates tag `<plugin>-v<version>`, a GitHub release, and auto-updates
    `versions.json` ([skip ci] commit by the bot).
 3. A tag that already exists fails CI — bump before merging.
-4. Update `CONTRACT.md` side-effect table whenever tool behavior changes so the
+4. `versions.json` is only ever updated **after** the build/test matrix and the
+   release job succeed (the publish job waits on both and verifies each tag's
+   release exists). A red run must never move `versions.json`, or the plugin
+   updater will 404 on a tag that was never released.
+5. Update `CONTRACT.md` side-effect table whenever tool behavior changes so the
    host-rendered contract stays accurate.
 
 ## Battle-tested debug playbook
