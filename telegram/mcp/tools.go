@@ -87,8 +87,10 @@ var (
 	progressStatuses = []string{"running", "ok", "error"}
 )
 
-// Telegram message text cap in code points (sendMessage). chunkText is
-// rune-aware so we never exceed this server-side.
+// telegramTextCap is Telegram's per-message text ceiling (sendMessage),
+// counted in UTF-16 code units: an astral-plane rune (most emoji) counts as
+// two. chunkText fits each chunk to this unit so multi-byte text never
+// exceeds the server-side limit.
 const telegramTextCap = 4096
 
 // sendMediaMaxBytes is the cloud Bot API upload ceiling (50 MB). Larger files
@@ -181,7 +183,7 @@ func registerTools(s *server.MCPServer, cli Client, store *Store, ingester *Inge
 	), handleSearchMessages(store))
 
 	s.AddTool(mcp.NewTool(toolSendMessage,
-		mcp.WithDescription("Send a text message to a Telegram chat. HTML parse_mode is the default; text longer than 4096 code points is split into multiple messages (the reply attaches to the first chunk). Confirm the chat_id and content before sending — this delivers a real message."),
+		mcp.WithDescription("Send a text message to a Telegram chat. HTML parse_mode is the default; there is no total length limit — text longer than one Telegram message is split losslessly into multiple messages (the reply attaches to the first chunk). Confirm the chat_id and content before sending — this delivers a real message."),
 		mcp.WithString("chat_id",
 			mcp.Required(),
 			mcp.Description("Target chat id (int64-as-string or '@username')."),
@@ -189,7 +191,6 @@ func registerTools(s *server.MCPServer, cli Client, store *Store, ingester *Inge
 		mcp.WithString("text",
 			mcp.Required(),
 			mcp.Description("Message text. With HTML parse_mode (default), escape <, >, & — or send plain text with parse_mode empty."),
-			mcp.MaxLength(65536),
 		),
 		mcp.WithNumber("reply_to_message_id",
 			mcp.Description("message_id to quote (reply to). Attaches to the first chunk when text is split."),
@@ -234,7 +235,7 @@ func registerTools(s *server.MCPServer, cli Client, store *Store, ingester *Inge
 		),
 		mcp.WithString("text",
 			mcp.Required(),
-			mcp.Description("Message text accompanying the buttons (<=4096 code points, HTML parse_mode)."),
+			mcp.Description("Message text accompanying the buttons (max 4096 characters; emoji count double, HTML parse_mode)."),
 			mcp.MaxLength(telegramTextCap),
 		),
 		mcp.WithString("buttons",
@@ -248,7 +249,7 @@ func registerTools(s *server.MCPServer, cli Client, store *Store, ingester *Inge
 	), handleSendInlineButtons(cli, store))
 
 	s.AddTool(mcp.NewTool(toolEditMessage,
-		mcp.WithDescription("Edit the text of a previously sent message. Text longer than 4096 code points is rejected. HTML parse_mode default."),
+		mcp.WithDescription("Edit the text of a previously sent message. Text longer than 4096 characters (UTF-16 units; emoji count double) is rejected. HTML parse_mode default."),
 		mcp.WithString("chat_id",
 			mcp.Required(),
 			mcp.Description("Chat containing the message (int64-as-string or '@username')."),
@@ -260,7 +261,7 @@ func registerTools(s *server.MCPServer, cli Client, store *Store, ingester *Inge
 		),
 		mcp.WithString("text",
 			mcp.Required(),
-			mcp.Description("New text (<=4096 code points, HTML parse_mode)."),
+			mcp.Description("New text (max 4096 characters; emoji count double, HTML parse_mode)."),
 			mcp.MaxLength(telegramTextCap),
 		),
 		mcp.WithString("parse_mode",
@@ -359,7 +360,7 @@ func registerTools(s *server.MCPServer, cli Client, store *Store, ingester *Inge
 	progressHandler := handleSendProgress(cli)
 	for _, name := range []string{toolInternalSendProgress, toolAdminSendProgress} {
 		s.AddTool(mcp.NewTool(name,
-			mcp.WithDescription("Host-internal: push agent lifecycle progress into a Telegram chat (new message or edit an existing placeholder). Not for agent use — the host hides this from agent tool listings. No store mirror, no outbound event, no allowlist gate."),
+			mcp.WithDescription("Host-internal: push agent lifecycle progress into a Telegram chat (new message or edit an existing placeholder). Not for agent use — the host hides this from agent tool listings. No length caps: text is delivered in full, split into multiple messages when it exceeds one Telegram message. No store mirror, no outbound event, no allowlist gate."),
 			mcp.WithString("chat_id",
 				mcp.Required(),
 				mcp.Description("Target chat id (int64-as-string or '@username')."),
@@ -374,15 +375,13 @@ func registerTools(s *server.MCPServer, cli Client, store *Store, ingester *Inge
 				mcp.Enum(progressStatuses...),
 			),
 			mcp.WithString("title",
-				mcp.Description("Short title (max 200 code points)."),
-				mcp.MaxLength(200),
+				mcp.Description("Optional short title line (delivered in full)."),
 			),
 			mcp.WithString("detail",
-				mcp.Description("Optional detail (max 500 code points)."),
-				mcp.MaxLength(500),
+				mcp.Description("Optional detail body; delivered in full — long text is split into multiple messages."),
 			),
 			mcp.WithString("message_id",
-				mcp.Description("When set, edit this existing message instead of sending a new one (placeholder pattern). On edit failure, falls back to a new send."),
+				mcp.Description("When set, edit this existing message instead of sending a new one (placeholder pattern). Text that no longer fits one message, or any edit failure, falls back to a new send."),
 			),
 		), progressHandler)
 	}
@@ -828,8 +827,8 @@ func handleEditMessage(cli Client) server.ToolHandlerFunc {
 		if text == "" {
 			return errorResult(fmt.Errorf("text is required")), nil
 		}
-		if len([]rune(text)) > telegramTextCap {
-			return errorResult(fmt.Errorf("text exceeds %d code points", telegramTextCap)), nil
+		if utf16Len(text) > telegramTextCap {
+			return errorResult(fmt.Errorf("text exceeds %d characters (UTF-16 units; emoji count double)", telegramTextCap)), nil
 		}
 		parseMode := argString(args, "parse_mode")
 		if parseMode == "" {
@@ -1042,8 +1041,11 @@ func handleSetPrivacyMode(store *Store) server.ToolHandlerFunc {
 // handleSendProgress pushes host-driven agent lifecycle progress into a chat.
 // Unlike send_message it never mirrors into SQLite, never emits a business
 // event, and never consults the allowlist — the host is the sole caller.
-// When message_id is set, it edits that placeholder; on any edit failure it
-// falls back to a fresh send so a stale id never fails the whole call.
+// Title/detail are delivered with no length caps: text is sent in full and
+// oversized payloads are split into multiple messages. When message_id is
+// set, it edits that placeholder; text that no longer fits one message, and
+// any edit failure, falls back to a fresh send so a stale id never fails the
+// whole call.
 func handleSendProgress(cli Client) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
@@ -1062,16 +1064,19 @@ func handleSendProgress(cli Client) server.ToolHandlerFunc {
 		if !isAllowedEnum(status, progressStatuses) {
 			return errorResult(fmt.Errorf("status must be one of: %s", strings.Join(progressStatuses, ", "))), nil
 		}
-		title := truncateRunes(argString(args, "title"), 200)
-		detail := truncateRunes(argString(args, "detail"), 500)
+		title := argString(args, "title")
+		detail := argString(args, "detail")
 		text := formatProgressHTML(eventType, status, title, detail)
 		messageID := strings.TrimSpace(argString(args, "message_id"))
 
-		// Edit path: attempt in-place update of the placeholder; fall back to
-		// send on any failure (missing, not editable, network, bad id).
+		// Edit path: attempt an in-place update of the placeholder. An edit
+		// cannot span multiple messages, so oversized text and any edit
+		// failure fall back to a fresh (possibly chunked) send.
 		if messageID != "" {
 			if _, err := strconv.ParseInt(messageID, 10, 64); err == nil {
-				if err := cli.EditMessage(ctx, chatID, messageID, text, "HTML"); err == nil {
+				if utf16Len(text) > telegramTextCap {
+					stderr("send_progress: text needs %d UTF-16 units (> %d); sending as new message(s)", utf16Len(text), telegramTextCap)
+				} else if err := cli.EditMessage(ctx, chatID, messageID, text, "HTML"); err == nil {
 					return jsonResult(map[string]any{
 						"message_id": messageID,
 						"edited":     true,
@@ -1085,16 +1090,29 @@ func handleSendProgress(cli Client) server.ToolHandlerFunc {
 			}
 		}
 
-		res, err := cli.SendText(ctx, chatID, text, 0, "HTML", false)
-		if err != nil {
-			return errorResult(fmt.Errorf("send progress: %w", err)), nil
+		// Send path: the full text with no artificial cap; oversized payloads
+		// are split into multiple messages so nothing is dropped.
+		chunks := chunkText(text, telegramTextCap)
+		var first SendResult
+		for i, chunk := range chunks {
+			res, err := cli.SendText(ctx, chatID, chunk, 0, "HTML", false)
+			if err != nil {
+				if i == 0 {
+					return errorResult(fmt.Errorf("send progress: %w", err)), nil
+				}
+				return errorResult(fmt.Errorf("send progress (chunk %d/%d): %w", i+1, len(chunks), err)), nil
+			}
+			if i == 0 {
+				first = res
+			}
 		}
 		// Intentionally no recordOutbound / no inbound notify — progress is
 		// host scaffolding, not chat content.
 		return jsonResult(map[string]any{
-			"message_id": strconv.FormatInt(res.MessageID, 10),
+			"message_id": strconv.FormatInt(first.MessageID, 10),
 			"edited":     false,
 			"chat_id":    chatID,
+			"chunks":     len(chunks),
 		})
 	}
 }

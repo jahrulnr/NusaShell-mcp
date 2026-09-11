@@ -21,8 +21,8 @@ approval state are persisted locally in SQLite.
 |------|-------------|
 | `login` | Validates token via `getMe`, stores token (file mode 0600) |
 | `logout` | Clears stored token, disconnects |
-| `send_message` | Sends a real message to a Telegram chat; mirrors the message into the local store so the UI shows it instantly |
-| `internal_send_progress` | Host-internal progress tool; no store mirror, no outbound event. Sends or edits a lifecycle progress message (reasoning / tool started / tool ok / step done). Alias of `admin.send_progress`. |
+| `send_message` | Sends a real message to a Telegram chat; mirrors the message into the local store so the UI shows it instantly. Text longer than one Telegram message is delivered as multiple messages (the first chunk carries the quote). |
+| `internal_send_progress` | Host-internal progress tool; no store mirror, no outbound event. Sends or edits a lifecycle progress message (reasoning / tool started / tool ok / step done); no length caps — oversized text is split into multiple messages. Alias of `admin.send_progress`. |
 | `admin.send_progress` | Host-internal progress tool; no store mirror, no outbound event. Same handler as `internal_send_progress` (dual alias for host forwarder naming). |
 | `send_media` | Uploads and sends a file; mirrors the caption/label into the local store |
 | `send_inline_buttons` | Sends a message with inline keyboard buttons; mirrors the text into the local store |
@@ -60,9 +60,12 @@ for NusaShell host forwarders that push agent lifecycle updates into a chat
 (placeholder send + edit). Agents do not need these tools — the host hides them
 from agent tool listings. Unlike `send_message`, progress updates are not
 mirrored into SQLite and do not emit `telegram.message` events; they are not
-subject to privacy/allowlist gating. When `message_id` is set, the tool edits
-that message; if the edit fails (stale/missing/uneditable), it falls back to a
-new send and returns `edited: false`.
+subject to privacy/allowlist gating. Title/detail have no length caps: the
+composed text is delivered in full and split into multiple messages when it
+exceeds one Telegram message. When `message_id` is set, the tool edits that
+message; if the text no longer fits one message, or the edit fails
+(stale/missing/uneditable), it falls back to a new send and returns
+`edited: false`.
 
 **All send tools deliver real messages to real people.** Confirm
 the chat and content before sending.

@@ -280,5 +280,85 @@ func TestFormatProgressHTML(t *testing.T) {
 	}
 }
 
+func TestSendProgress_NoFieldCaps(t *testing.T) {
+	cli := newProgressStub()
+	h := handleSendProgress(cli)
+	longTitle := strings.Repeat("t", 400)
+	longDetail := strings.Repeat("d", 900)
+	res := callHandler(t, h, map[string]any{
+		"chat_id":    "520213916",
+		"event_type": "tool_started",
+		"status":     "running",
+		"title":      longTitle,
+		"detail":     longDetail,
+	})
+	m := decodeResult(t, res)
+	if m["edited"] != false {
+		t.Errorf("edited = %v, want false", m["edited"])
+	}
+	if len(cli.sends) != 1 {
+		t.Fatalf("want 1 send below the transport cap, got %d", len(cli.sends))
+	}
+	text := cli.sends[0].Text
+	if !strings.Contains(text, longTitle) || !strings.Contains(text, longDetail) {
+		t.Fatalf("long title/detail were truncated (text len=%d)", len(text))
+	}
+}
+
+func TestSendProgress_OversizedDetailIsChunkedLossless(t *testing.T) {
+	cli := newProgressStub()
+	h := handleSendProgress(cli)
+	detail := strings.Repeat("m", 6000)
+	res := callHandler(t, h, map[string]any{
+		"chat_id":    "520213916",
+		"event_type": "step_ended",
+		"status":     "ok",
+		"detail":     detail,
+	})
+	m := decodeResult(t, res)
+	if m["edited"] != false {
+		t.Errorf("edited = %v, want false", m["edited"])
+	}
+	if len(cli.sends) < 2 {
+		t.Fatalf("expected multiple sends for oversized text, got %d", len(cli.sends))
+	}
+	if got, _ := m["chunks"].(float64); int(got) != len(cli.sends) {
+		t.Errorf("chunks = %v, want %d", m["chunks"], len(cli.sends))
+	}
+	var joined strings.Builder
+	for _, s := range cli.sends {
+		if utf16Len(s.Text) > telegramTextCap {
+			t.Fatalf("chunk is %d UTF-16 units (> %d)", utf16Len(s.Text), telegramTextCap)
+		}
+		joined.WriteString(s.Text)
+	}
+	if joined.String() != detail {
+		t.Fatalf("chunked sends lost data (len %d vs %d)", joined.Len(), len(detail))
+	}
+}
+
+func TestSendProgress_EditTooLongFallsBackToSend(t *testing.T) {
+	cli := newProgressStub()
+	h := handleSendProgress(cli)
+	detail := strings.Repeat("x", 5000)
+	res := callHandler(t, h, map[string]any{
+		"chat_id":    "520213916",
+		"event_type": "step_ended",
+		"status":     "ok",
+		"detail":     detail,
+		"message_id": "77",
+	})
+	m := decodeResult(t, res)
+	if m["edited"] != false {
+		t.Errorf("edited = %v, want false after oversized-edit fallback", m["edited"])
+	}
+	if len(cli.edits) != 0 {
+		t.Fatalf("oversized text must not attempt an edit: %+v", cli.edits)
+	}
+	if len(cli.sends) < 2 {
+		t.Fatalf("expected chunked sends, got %d", len(cli.sends))
+	}
+}
+
 // Ensure progressStub satisfies Client at compile time.
 var _ Client = (*progressStub)(nil)

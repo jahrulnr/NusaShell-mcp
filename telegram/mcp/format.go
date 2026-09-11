@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // Telegram Bot API parse_mode=HTML supports a small whitelist of tags:
@@ -175,18 +176,19 @@ func groupBlockquotes(text string) string {
 	return strings.Join(out, "\n")
 }
 
-// truncateRunes returns s limited to max Unicode code points. Unlike
-// truncateText it does not append an ellipsis — used for field caps where the
-// caller already owns presentation.
-func truncateRunes(s string, max int) string {
-	if max <= 0 {
-		return ""
+// utf16Len returns the length of s in UTF-16 code units — the unit Telegram
+// uses for its message-size limits. Astral-plane runes (most emoji) count as
+// two units; everything else counts as one.
+func utf16Len(s string) int {
+	n := 0
+	for _, r := range s {
+		if r > 0xFFFF {
+			n += 2
+		} else {
+			n++
+		}
 	}
-	r := []rune(s)
-	if len(r) <= max {
-		return s
-	}
-	return string(r[:max])
+	return n
 }
 
 // progressEventLabel returns a short human label for a progress event_type.
@@ -210,8 +212,8 @@ func progressEventLabel(eventType string) string {
 }
 
 // formatProgressHTML builds a parse_mode=HTML progress body from lifecycle
-// fields. Title and detail are escaped; the composed message is truncated to
-// telegramTextCap code points if needed (title/detail are already capped).
+// fields. Title and detail are escaped and passed through in full — callers
+// split oversized text into multiple messages (see chunkText).
 func formatProgressHTML(eventType, status, title, detail string) string {
 	// The final reply is a clean chat message: no header, no title.
 	if eventType == "step_ended" && status == "ok" {
@@ -227,44 +229,62 @@ func formatProgressHTML(eventType, status, title, detail string) string {
 		b.WriteByte('\n')
 		b.WriteString(sanitizeForTelegram(detail))
 	}
-	text := b.String()
-	if len([]rune(text)) > telegramTextCap {
-		return truncateRunes(text, telegramTextCap)
-	}
-	return text
+	return b.String()
 }
 
-// chunkText splits text into pieces that fit within maxLen code points,
-// preferring to split at paragraph (\n\n), then line (\n), then space
-// boundaries. Telegram's sendMessage cap is 4096 code points (not bytes), so
-// chunking is rune-aware to avoid splitting a multi-byte rune or overflowing
-// the server-side limit.
+// chunkText splits text into pieces that fit within maxLen UTF-16 code
+// units, preferring to split at paragraph (\n\n), then line (\n), then space
+// boundaries. Telegram's sendMessage ceiling is counted in UTF-16 code units
+// (not bytes or runes), so fitting on that unit keeps emoji-heavy text from
+// being rejected, and no multi-byte rune is ever split. Text that already
+// fits is returned untouched.
 func chunkText(text string, maxLen int) []string {
-	if maxLen <= 0 {
-		return []string{text}
-	}
-	runes := []rune(text)
-	if len(runes) <= maxLen {
+	if maxLen <= 0 || utf16Len(text) <= maxLen {
 		return []string{text}
 	}
 
+	runes := []rune(text)
 	var chunks []string
 	for len(runes) > 0 {
-		if len(runes) <= maxLen {
+		// Largest rune count that stays within maxLen UTF-16 units.
+		units, n := 0, 0
+		for n < len(runes) {
+			w := 1
+			if runes[n] > 0xFFFF {
+				w = 2
+			}
+			if units+w > maxLen {
+				break
+			}
+			units += w
+			n++
+		}
+		if n == 0 { // maxLen too small for one astral rune; keep progress
+			n = 1
+		}
+		if n >= len(runes) {
 			chunks = append(chunks, string(runes))
 			break
 		}
-		window := string(runes[:maxLen])
-		cutAt := maxLen
+		// Prefer a boundary inside the fitting window. LastIndex returns a
+		// byte offset, so translate it back to a rune index before slicing.
+		window := string(runes[:n])
+		cut := n
 		if idx := strings.LastIndex(window, "\n\n"); idx > 0 {
-			cutAt = idx
+			cut = utf8.RuneCountInString(window[:idx])
 		} else if idx := strings.LastIndex(window, "\n"); idx > 0 {
-			cutAt = idx
+			cut = utf8.RuneCountInString(window[:idx])
 		} else if idx := strings.LastIndex(window, " "); idx > 0 {
-			cutAt = idx
+			cut = utf8.RuneCountInString(window[:idx])
 		}
-		chunks = append(chunks, strings.TrimRight(string(runes[:cutAt]), " \n"))
-		runes = []rune(strings.TrimLeft(string(runes[cutAt:]), " \n"))
+		if cut <= 0 {
+			cut = n
+		}
+		piece := strings.TrimRight(string(runes[:cut]), " \n")
+		runes = []rune(strings.TrimLeft(string(runes[cut:]), " \n"))
+		if piece != "" {
+			chunks = append(chunks, piece)
+		}
 	}
 	return chunks
 }

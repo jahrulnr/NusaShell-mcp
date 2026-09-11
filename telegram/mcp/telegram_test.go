@@ -444,13 +444,50 @@ func TestChunkText_RuneAwareNoLoss(t *testing.T) {
 		t.Fatalf("expected ≥2 chunks, got %d", len(chunks))
 	}
 	for _, c := range chunks {
-		if len([]rune(c)) > 4096 {
-			t.Errorf("chunk is %d runes (>4096)", len([]rune(c)))
+		if utf16Len(c) > 4096 {
+			t.Errorf("chunk is %d UTF-16 units (>4096)", utf16Len(c))
 		}
 	}
 	joined := strings.Join(chunks, "")
 	if joined != long {
 		t.Errorf("chunks lost data (len %d vs %d)", len(joined), len(long))
+	}
+}
+
+func TestChunkText_UTF16UnitsForEmoji(t *testing.T) {
+	long := strings.Repeat("😀", 3000) // 3000 runes, 6000 UTF-16 units
+	chunks := chunkText(long, 4096)
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(chunks))
+	}
+	for _, c := range chunks {
+		if utf16Len(c) > 4096 {
+			t.Errorf("chunk is %d UTF-16 units (>4096)", utf16Len(c))
+		}
+	}
+	if strings.Join(chunks, "") != long {
+		t.Errorf("emoji chunks lost data")
+	}
+}
+
+func TestChunkText_MultibyteBoundaryStaysWithinCap(t *testing.T) {
+	// Regression: byte offsets from LastIndex must not be used as rune
+	// indexes — multibyte text with a boundary used to overflow or panic.
+	long := strings.Repeat("é", 4090) + "\n" + strings.Repeat("b", 300)
+	chunks := chunkText(long, 4096)
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(chunks))
+	}
+	for _, c := range chunks {
+		if utf16Len(c) > 4096 {
+			t.Errorf("chunk is %d UTF-16 units (>4096)", utf16Len(c))
+		}
+	}
+	if chunks[0] != strings.Repeat("é", 4090) {
+		t.Errorf("first chunk lost multibyte head: len=%d", len(chunks[0]))
+	}
+	if chunks[1] != strings.Repeat("b", 300) {
+		t.Errorf("last chunk lost tail: len=%d", len(chunks[1]))
 	}
 }
 
